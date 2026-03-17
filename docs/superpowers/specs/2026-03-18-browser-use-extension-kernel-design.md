@@ -173,16 +173,34 @@ This happens automatically in the `attach()` method.
 
 ### 2. Snapshot Engine (`snapshot-engine.ts`)
 
-Builds an accessibility-tree snapshot with numbered refs. The agent's "eyes." Equivalent to OpenClaw's `pw-role-snapshot.ts` + `agent.snapshot.ts`.
+Builds a **hybrid snapshot** combining an accessibility tree (text) with a page screenshot (image). This dual-channel approach is how both Claude Code's Chrome extension (screenshot-first) and OpenClaw (snapshot-first) achieve reliable page understanding. The text snapshot provides structured, actionable refs; the screenshot provides visual context that catches layout, images, charts, and UI states the accessibility tree misses.
 
 **How it works:**
 
-1. Call `Accessibility.getFullAXTree` via CDP Manager
-2. Receive array of `AXNode` objects with roles, names, values, properties
-3. Walk the tree, filter out irrelevant nodes
+1. Call `Accessibility.getFullAXTree` via CDP Manager → text snapshot with refs
+2. Call `Page.captureScreenshot` via CDP Manager → viewport screenshot as base64 PNG
+3. Walk the accessibility tree, filter out irrelevant nodes
 4. Assign refs (`e1`, `e2`, `e3`...) based on role categories
 5. Build compact text representation for the LLM
 6. Store ref→node mapping for action resolution
+7. Return both the text snapshot and screenshot as a `HybridSnapshot`
+
+```typescript
+interface HybridSnapshot {
+  text: string;              // Formatted accessibility tree with refs
+  screenshotBase64: string;  // Viewport screenshot as base64 PNG
+  refMap: RefMap;             // ref → node mapping for actions
+  metadata: {
+    url: string;
+    title: string;
+    truncated: boolean;
+    totalElements: number;
+    visibleElements: number;
+  };
+}
+```
+
+The agent receives **both** the text snapshot (as text content) and the screenshot (as an image content block) in each observation. The text provides the refs for actions; the screenshot helps the LLM understand visual layout, recognize images/icons, and handle cases where the accessibility tree is incomplete.
 
 **Ref assignment rules (matching OpenClaw):**
 
@@ -409,8 +427,11 @@ interface LLMConfig {
   modelName: string;       // e.g., "gpt-4o"
   maxTokens: number;       // Response limit (default: 4096)
   temperature: number;     // Generation temperature (default: 0.2)
+  screenshotDetail: 'low' | 'high';  // Vision detail level (default: 'low')
 }
 ```
+
+**Vision support:** The LLM client sends multi-part messages containing both text and image content blocks (OpenAI vision format). This requires a vision-capable model (e.g., `gpt-4o`, `claude-sonnet-4-20250514` via proxy, `llava` on Ollama). If the model does not support vision, the screenshot is silently omitted and only the text snapshot is sent.
 
 **API call:**
 
@@ -466,23 +487,47 @@ interface AgentState {
 ```
 You are a browser automation agent. You control a Chrome browser to accomplish the user's task.
 
-You can see the page through accessibility snapshots that show interactive elements with refs like [e1], [e2], etc. Use these refs to interact with elements.
+You can see the page in two ways:
+1. An accessibility snapshot showing interactive elements with refs like [e1], [e2], etc. Use these refs to interact with elements.
+2. A screenshot of the current viewport for visual context — helps you understand layout, images, icons, and visual states.
+
+Use the text snapshot for finding elements and their refs. Use the screenshot to understand what the page looks like visually. Together they give you a complete picture.
 
 Available tools: [tool definitions injected here]
-
-Current page state:
-URL: {currentUrl}
-Title: {pageTitle}
-
-{snapshotText}
 
 Instructions:
 - Use snapshot to understand the page before acting
 - Use refs from the most recent snapshot (they change on navigation)
 - Take a new snapshot after navigation or major page changes
+- The screenshot shows the viewport only; scroll to see more content
 - When the task is complete, respond with a text message summarizing what was done
 - If you get stuck, describe the problem and ask the user for guidance
 ```
+
+**Hybrid observation format (sent to LLM):**
+
+Each observation is a multi-part message using the OpenAI content array format:
+
+```typescript
+{
+  role: 'user',
+  content: [
+    {
+      type: 'text',
+      text: `Current page: ${url}\nTitle: ${title}\n\n${snapshotText}`
+    },
+    {
+      type: 'image_url',
+      image_url: {
+        url: `data:image/png;base64,${screenshotBase64}`,
+        detail: 'low'  // 'low' for speed/tokens, 'high' for detail
+      }
+    }
+  ]
+}
+```
+
+The `detail` parameter defaults to `'low'` (faster, fewer tokens) but can be configured to `'high'` in settings for tasks that need pixel-level precision. This follows the OpenAI vision API format, which is also supported by compatible endpoints (Anthropic via proxy, Ollama with vision models, etc.).
 
 **Loop logic:**
 
@@ -491,12 +536,13 @@ function runAgentLoop(userPrompt):
   state.status = 'running'
   state.iteration = 0
 
-  # Initial snapshot
-  snapshot = snapshotEngine.takeSnapshot(state.currentTabId)
+  # Initial hybrid snapshot (text + screenshot)
+  snapshot = snapshotEngine.takeHybridSnapshot(state.currentTabId)
 
   # Build initial messages
   state.conversationHistory = [
-    {role: 'system', content: buildSystemPrompt(snapshot)},
+    {role: 'system', content: buildSystemPrompt()},
+    buildObservationMessage(snapshot),   # multi-part: text snapshot + screenshot image
     {role: 'user', content: userPrompt}
   ]
 
@@ -531,10 +577,10 @@ function runAgentLoop(userPrompt):
 
         await sleep(state.actionDelayMs)
 
-      # Take fresh snapshot if page likely changed
+      # Take fresh hybrid snapshot if page likely changed
       if pageChanged:
-        newSnapshot = snapshotEngine.takeSnapshot(state.currentTabId)
-        # Update system prompt with new snapshot or append as context
+        newSnapshot = snapshotEngine.takeHybridSnapshot(state.currentTabId)
+        state.conversationHistory.push(buildObservationMessage(newSnapshot))
 
   if state.iteration >= state.maxIterations:
     sendToSidePanel({type: 'error', text: 'Max iterations reached'})
@@ -926,6 +972,8 @@ Simple form to configure the LLM connection.
 - Model Name (text input, placeholder: `gpt-4o`)
 - Max Tokens (number input, default: 4096)
 - Temperature (number input, default: 0.2)
+- Screenshot Detail (select: `low` | `high`, default: `low`) — controls vision token usage
+- Vision Enabled (checkbox, default: true) — disable to skip screenshots for non-vision models
 - Max Iterations (number input, default: 50)
 - Action Delay (number input in ms, default: 500)
 
@@ -999,7 +1047,6 @@ Complex pages can produce accessibility trees exceeding LLM context limits. Miti
 - Multi-model support / model switching within a session
 - Conversation export/import
 - Extension marketplace publishing
-- Vision model support for screenshots (could be added by passing base64 images as content)
 - Proxy/auth configuration for the LLM API
 - Rate limiting / cost tracking
 - Recording/replay of action sequences
