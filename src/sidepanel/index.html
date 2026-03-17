@@ -4,10 +4,38 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Browser Use</title>
+  <link rel="stylesheet" href="panel.css">
 </head>
 <body>
   <div id="app">
-    <h1>Browser Use</h1>
+    <header class="header">
+      <h1 class="header-title">Browser Use</h1>
+      <button id="settings-btn" class="settings-btn" title="Settings">
+        &#9881;
+      </button>
+    </header>
+
+    <div id="message-log" class="message-log"></div>
+
+    <div class="bottom-bar">
+      <div id="status-bar" class="status-bar">
+        <span id="status-text" class="status-text">Idle</span>
+        <button id="stop-btn" class="stop-btn" hidden>Stop</button>
+      </div>
+
+      <div class="input-bar">
+        <input
+          type="text"
+          id="prompt-input"
+          class="prompt-input"
+          placeholder="Ask the agent to do something..."
+          autocomplete="off"
+        />
+        <button id="send-btn" class="send-btn">Send</button>
+      </div>
+    </div>
   </div>
+
+  <script type="module" src="panel.ts"></script>
 </body>
 </html>

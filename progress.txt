@@ -214,3 +214,70 @@
   - Both set_viewport and pdf are simple CDP wrappers with no ref resolution needed
   - set_viewport takes width and height as numbers from args; pdf takes no args beyond tabId
 ---
+
+## 2026-03-18 - US-019
+- What was implemented: Tool definitions for LLM — all 22 OpenAI function-calling format tool schemas in src/background/tool-definitions.ts
+- Files changed: src/background/tool-definitions.ts
+- **Learnings for future iterations:**
+  - ToolDefinition interface defined locally in tool-definitions.ts (not in types.ts) since it's only used by the LLM client and agent loop
+  - All 22 tools: snapshot, click, type, navigate, screenshot, press, scroll, hover, drag, select, fill, wait, evaluate, tab_list, tab_open, tab_close, tab_focus, cookies_get, cookies_set, cookies_clear, set_viewport, pdf
+  - Tool schemas match OpenAI function-calling format: {type: 'function', function: {name, description, parameters: {type: 'object', properties, required}}}
+  - Tools with no parameters still need an empty properties object and empty required array
+---
+
+## 2026-03-18 - US-020
+- What was implemented: LLM client — chatCompletion function in src/background/llm-client.ts that calls any OpenAI-compatible chat completions endpoint with tool definitions and vision support
+- Files changed: src/background/llm-client.ts
+- **Learnings for future iterations:**
+  - chatCompletion takes (messages, tools, config) and POSTs to ${config.apiBaseUrl}/chat/completions
+  - When visionEnabled is false, image_url content blocks are stripped from messages before sending
+  - Retry logic: 429 and 5xx get exponential backoff (1s, 2s, 4s) up to 3 retries; 401/403 throw immediately
+  - Network errors (fetch failures) also retry with backoff — important for flaky connections
+  - ChatCompletionResponse interface includes choices[].message with content and optional tool_calls
+  - ToolDefinition is imported from tool-definitions.ts (not types.ts) since it's co-located with the schemas
+---
+
+## 2026-03-18 - US-021
+- What was implemented: AgentLoop class in src/background/agent-loop.ts — core orchestration engine that ties snapshot, LLM, and actions together
+- Files changed: src/background/agent-loop.ts
+- **Learnings for future iterations:**
+  - AgentLoop constructor takes CDPManager, SnapshotEngine, ActionExecutor, and LLMConfig — instantiated externally (by service-worker.ts)
+  - setConfig(config) allows updating LLM config between runs (e.g., after user changes settings)
+  - The 'snapshot' tool call is handled directly by the agent loop (not by ActionExecutor) since it needs to update the refMap and emit snapshot preview
+  - Observation messages use OpenAI multi-part content: [{type:'text', text: snapshotText}, {type:'image_url', image_url: {url: data:image/png;base64,..., detail: config.screenshotDetail}}]
+  - Page change detection: compares URL/title before and after action batch, plus checks if action is in PAGE_CHANGE_ACTIONS set (navigate, click, tab_focus, tab_open)
+  - Fresh snapshot taken automatically after page change; refMap updated on every snapshot
+  - Conversation persisted to chrome.storage.session (not local) for service worker survival across restarts
+  - Callbacks (onStatus, onAction, etc.) are single-function registrations (not arrays) — sufficient for single panel connection
+  - Agent loop checks state.status before each LLM call and before each action to support stop()
+  - Max iterations (default 50) checked in the while loop; emits error when exceeded
+---
+
+## 2026-03-18 - US-022
+- What was implemented: Service worker entry point and message routing in src/background/service-worker.ts
+- Files changed: src/background/service-worker.ts
+- **Learnings for future iterations:**
+  - Service worker instantiates all modules at top level: CDPManager → SnapshotEngine → ActionExecutor → AgentLoop (created per prompt)
+  - AgentLoop is created fresh for each user_prompt to get the latest LLMConfig from chrome.storage.local
+  - LLMConfig stored under key 'llmConfig' in chrome.storage.local — loadConfig() merges with defaults
+  - Port connection uses name 'agent-panel' — panel.ts must connect with this exact name
+  - wireAgentCallbacks() maps all 6 AgentLoop callbacks to PanelMessage types sent via port.postMessage
+  - chrome.tabs.query({active: true, currentWindow: true}) gets the currently active tab for the agent to operate on
+  - port.onDisconnect fires when panel closes — must stop the agent loop to prevent orphaned runs
+  - chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }) makes the extension icon open the side panel
+  - sendToPanel() wraps port.postMessage in try/catch since port may be disconnected
+---
+
+## 2026-03-18 - US-023
+- What was implemented: Side panel HTML and CSS — chat interface with message log, input bar, status bar, stop button, and settings gear
+- Files changed: src/sidepanel/index.html, src/sidepanel/panel.css, src/sidepanel/panel.ts (placeholder)
+- **Learnings for future iterations:**
+  - Side panel HTML links panel.css directly and loads panel.ts as a module script
+  - CSS uses flexbox layout: #app is a column flex container, .message-log has flex: 1 for fill
+  - Message types have distinct CSS classes: message-user (right-aligned, blue), message-agent (left-aligned, white), message-action (monospace), message-error (red)
+  - Stop button uses `hidden` attribute (not CSS display) for toggling visibility
+  - Snapshot previews use a collapsible pattern: .snapshot-toggle + .snapshot-content with .open class
+  - Status text uses color classes: .thinking (blue), .acting (orange), .error (red)
+  - panel.ts placeholder created as empty export — US-024 will implement the logic
+  - @crxjs/vite-plugin handles CSS bundling from HTML link tags automatically
+---

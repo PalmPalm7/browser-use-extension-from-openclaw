@@ -363,7 +363,7 @@
         "Typecheck passes"
       ],
       "priority": 20,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -388,7 +388,7 @@
         "Typecheck passes"
       ],
       "priority": 21,
-      "passes": false,
+      "passes": true,
       "notes": "This is the core engine. Large but tightly coupled — splitting would create artificial boundaries."
     },
     {
@@ -408,7 +408,7 @@
         "Typecheck passes"
       ],
       "priority": 22,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -430,7 +430,7 @@
         "Typecheck passes"
       ],
       "priority": 23,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
