@@ -353,6 +353,42 @@ export class ActionExecutor {
     return { success: true };
   }
 
+  async select(
+    tabId: number,
+    ref: string,
+    values: string[],
+  ): Promise<ActionResult> {
+    const entry = this.resolveRef(ref);
+    const objectId = await this.resolveObjectId(tabId, entry.backendNodeId);
+
+    const result = await this.cdp.send<{ result: { value: string[] } }>(
+      tabId,
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration: `function(values) {
+          var selected = [];
+          for (var i = 0; i < this.options.length; i++) {
+            var opt = this.options[i];
+            if (values.indexOf(opt.value) !== -1) {
+              opt.selected = true;
+              selected.push(opt.value);
+            } else {
+              opt.selected = false;
+            }
+          }
+          this.dispatchEvent(new Event('change', {bubbles: true}));
+          this.dispatchEvent(new Event('input', {bubbles: true}));
+          return selected;
+        }`,
+        arguments: [{ value: values }],
+        returnByValue: true,
+      },
+    );
+
+    return { success: true, data: { selected: result.result.value } };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -393,6 +429,12 @@ export class ActionExecutor {
             tabId,
             args.startRef as string,
             args.endRef as string,
+          );
+        case 'select':
+          return await this.select(
+            tabId,
+            args.ref as string,
+            args.values as string[],
           );
         default:
           return { success: false, error: `Unknown action: ${toolName}` };

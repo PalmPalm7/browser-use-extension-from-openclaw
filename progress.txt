@@ -104,3 +104,47 @@
   - Runtime.evaluate may throw during navigation (page not ready) — catch and continue polling
   - Navigate doesn't need a ref — it takes a URL string directly, unlike click/type
 ---
+
+## 2026-03-18 - US-009
+- What was implemented: Screenshot action method in ActionExecutor with optional fullPage support
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Page.captureScreenshot takes {format: 'png'} and returns {data: base64string}
+  - For full-page screenshots, pass captureBeyondViewport: true
+  - Screenshot doesn't need a ref — it captures the whole viewport (or full page)
+  - ScreenshotOptions interface follows the same pattern as ClickOptions/TypeOptions
+---
+
+## 2026-03-18 - US-010
+- What was implemented: Press, scroll, and hover action methods in ActionExecutor
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - press() uses Input.dispatchKeyEvent with key and code — a KEY_CODE_MAP handles special keys (Enter, Tab, Escape, Arrow keys, etc.)
+  - For standard character keys not in the map, code defaults to `Key${key.toUpperCase()}`
+  - scroll() is the simplest action — just DOM.scrollIntoViewIfNeeded with backendNodeId
+  - hover() dispatches a single mouseMoved event to the element's center point
+  - Press doesn't need a ref — it sends key events to whatever is currently focused
+  - Scroll and hover both require a ref to identify the target element
+---
+
+## 2026-03-18 - US-011
+- What was implemented: Drag action method in ActionExecutor with start/end ref resolution, interpolated mouse movement, and press/release dispatch
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Drag requires both startRef and endRef — two separate refs resolved from the refMap
+  - Scroll the start element into view before beginning the drag sequence
+  - Interpolate movement in ~10 steps using linear interpolation (t = i/steps) for smooth drag
+  - Drag sequence: mouseMoved to start → mousePressed at start → 10x mouseMoved interpolated → mouseReleased at end
+  - In execute() dispatcher, drag args use `startRef` and `endRef` (not just `ref`)
+---
+
+## 2026-03-18 - US-012
+- What was implemented: Select action method in ActionExecutor for dropdown/select elements
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - select() uses Runtime.callFunctionOn with objectId to iterate `<option>` children directly on the DOM element
+  - The helper function sets `opt.selected = true/false` for each option, matching against the provided values array
+  - Must dispatch both 'change' and 'input' events with `{bubbles: true}` after modifying selections
+  - Arguments to Runtime.callFunctionOn use `arguments: [{value: values}]` format — values are passed as the first function parameter
+  - Returns the list of actually selected option values in ActionResult.data.selected
+---
