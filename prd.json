@@ -344,7 +344,7 @@
         "Typecheck passes"
       ],
       "priority": 19,
-      "passes": false,
+      "passes": true,
       "notes": "Refer to docs/superpowers/specs/2026-03-18-browser-use-extension-kernel-design.md section 6 for exact tool schemas."
     },
     {
