@@ -577,6 +577,44 @@ export class ActionExecutor {
     return { success: true, data: result.result.value };
   }
 
+  async tabList(): Promise<ActionResult> {
+    const tabs = await chrome.tabs.query({});
+    const data = tabs.map((tab) => ({
+      id: tab.id,
+      title: tab.title,
+      url: tab.url,
+      active: tab.active,
+    }));
+    return { success: true, data };
+  }
+
+  async tabOpen(url: string): Promise<ActionResult> {
+    const tab = await chrome.tabs.create({ url });
+    return {
+      success: true,
+      data: { id: tab.id, title: tab.title, url: tab.url, active: tab.active },
+    };
+  }
+
+  async tabClose(tabId: number): Promise<ActionResult> {
+    if (this.cdp.isAttached(tabId)) {
+      await this.cdp.detach(tabId);
+    }
+    await chrome.tabs.remove(tabId);
+    return { success: true };
+  }
+
+  async tabFocus(tabId: number): Promise<ActionResult> {
+    await chrome.tabs.update(tabId, { active: true });
+    if (!this.cdp.isAttached(tabId)) {
+      await this.cdp.attach(tabId);
+    }
+    return {
+      success: true,
+      data: { tabId },
+    };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -644,6 +682,14 @@ export class ActionExecutor {
             args.fn as string,
             args.ref as string | undefined,
           );
+        case 'tab_list':
+          return await this.tabList();
+        case 'tab_open':
+          return await this.tabOpen(args.url as string);
+        case 'tab_close':
+          return await this.tabClose(args.tabId as number);
+        case 'tab_focus':
+          return await this.tabFocus(args.tabId as number);
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
       }
