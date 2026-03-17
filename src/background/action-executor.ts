@@ -31,6 +31,10 @@ interface TypeOptions {
   slowly?: boolean;
 }
 
+interface ScreenshotOptions {
+  fullPage?: boolean;
+}
+
 export class ActionExecutor {
   private cdp: CDPManager;
   private refMap: RefMap = new Map();
@@ -220,6 +224,24 @@ export class ActionExecutor {
     return { success: true, data: { url } };
   }
 
+  async screenshot(
+    tabId: number,
+    options?: ScreenshotOptions,
+  ): Promise<ActionResult> {
+    const params: Record<string, unknown> = { format: 'png' };
+    if (options?.fullPage) {
+      params.captureBeyondViewport = true;
+    }
+
+    const result = await this.cdp.send<{ data: string }>(
+      tabId,
+      'Page.captureScreenshot',
+      params,
+    );
+
+    return { success: true, data: { base64: result.data } };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -245,6 +267,10 @@ export class ActionExecutor {
           );
         case 'navigate':
           return await this.navigate(tabId, args.url as string);
+        case 'screenshot':
+          return await this.screenshot(tabId, {
+            fullPage: args.fullPage as boolean | undefined,
+          });
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
       }
