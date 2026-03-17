@@ -93,3 +93,14 @@
   - Submit is implemented as Enter keyDown + keyUp via Input.dispatchKeyEvent with key and code both set to "Enter"
   - TypeOptions interface follows same pattern as ClickOptions — define near top of file
 ---
+
+## 2026-03-18 - US-008
+- What was implemented: Navigate action method in ActionExecutor with URL validation, Page.navigate CDP call, and readyState polling
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Page.navigate returns {frameId, errorText?} — check errorText for navigation failures
+  - Use `new URL(url)` for URL validation — throws on invalid URLs
+  - Poll document.readyState via Runtime.evaluate to wait for page load (200ms intervals, 15s timeout)
+  - Runtime.evaluate may throw during navigation (page not ready) — catch and continue polling
+  - Navigate doesn't need a ref — it takes a URL string directly, unlike click/type
+---
