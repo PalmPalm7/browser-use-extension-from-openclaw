@@ -678,6 +678,29 @@ export class ActionExecutor {
     return { success: true };
   }
 
+  async setViewport(
+    tabId: number,
+    width: number,
+    height: number,
+  ): Promise<ActionResult> {
+    await this.cdp.send(tabId, 'Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    return { success: true };
+  }
+
+  async pdf(tabId: number): Promise<ActionResult> {
+    const result = await this.cdp.send<{ data: string }>(
+      tabId,
+      'Page.printToPDF',
+      {},
+    );
+    return { success: true, data: { base64: result.data } };
+  }
+
   async cookiesClear(tabId: number): Promise<ActionResult> {
     const urlResult = await this.cdp.send<{ result: { value: string } }>(
       tabId,
@@ -792,6 +815,14 @@ export class ActionExecutor {
           });
         case 'cookies_clear':
           return await this.cookiesClear(tabId);
+        case 'set_viewport':
+          return await this.setViewport(
+            tabId,
+            args.width as number,
+            args.height as number,
+          );
+        case 'pdf':
+          return await this.pdf(tabId);
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
       }

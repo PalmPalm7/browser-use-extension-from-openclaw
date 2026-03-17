@@ -204,3 +204,13 @@
   - CookieEntry and CookieSetParams interfaces defined locally alongside other CDP response types
   - cookies_get needs no args beyond tabId; cookies_set takes params object; cookies_clear needs no args beyond tabId
 ---
+
+## 2026-03-18 - US-018
+- What was implemented: setViewport and pdf action methods in ActionExecutor
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Emulation.setDeviceMetricsOverride takes {width, height, deviceScaleFactor, mobile} — deviceScaleFactor: 1 and mobile: false for desktop emulation
+  - Page.printToPDF takes {} (empty params for defaults) and returns {data: base64string} — same pattern as Page.captureScreenshot
+  - Both set_viewport and pdf are simple CDP wrappers with no ref resolution needed
+  - set_viewport takes width and height as numbers from args; pdf takes no args beyond tabId
+---
