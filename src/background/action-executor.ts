@@ -41,6 +41,15 @@ interface FillField {
   value: string;
 }
 
+interface WaitConditions {
+  text?: string;
+  textGone?: string;
+  selector?: string;
+  url?: string;
+  fn?: string;
+  timeoutMs?: number;
+}
+
 const KEY_CODE_MAP: Record<string, string> = {
   Enter: 'Enter',
   Tab: 'Tab',
@@ -434,6 +443,92 @@ export class ActionExecutor {
     return { success: true, data: { filled } };
   }
 
+  async wait(
+    tabId: number,
+    conditions: WaitConditions,
+  ): Promise<ActionResult> {
+    const timeoutMs = conditions.timeoutMs ?? 10000;
+    const pollIntervalMs = 200;
+    const start = Date.now();
+
+    while (Date.now() - start < timeoutMs) {
+      let conditionMet = true;
+
+      if (conditions.text !== undefined) {
+        const result = await this.cdp.send<{ result: { value: boolean } }>(
+          tabId,
+          'Runtime.evaluate',
+          {
+            expression: `document.body.innerText.includes(${JSON.stringify(conditions.text)})`,
+            returnByValue: true,
+          },
+        );
+        if (!result.result.value) conditionMet = false;
+      }
+
+      if (conditionMet && conditions.textGone !== undefined) {
+        const result = await this.cdp.send<{ result: { value: boolean } }>(
+          tabId,
+          'Runtime.evaluate',
+          {
+            expression: `!document.body.innerText.includes(${JSON.stringify(conditions.textGone)})`,
+            returnByValue: true,
+          },
+        );
+        if (!result.result.value) conditionMet = false;
+      }
+
+      if (conditionMet && conditions.selector !== undefined) {
+        const result = await this.cdp.send<{ result: { value: boolean } }>(
+          tabId,
+          'Runtime.evaluate',
+          {
+            expression: `document.querySelector(${JSON.stringify(conditions.selector)}) !== null`,
+            returnByValue: true,
+          },
+        );
+        if (!result.result.value) conditionMet = false;
+      }
+
+      if (conditionMet && conditions.url !== undefined) {
+        const result = await this.cdp.send<{ result: { value: string } }>(
+          tabId,
+          'Runtime.evaluate',
+          {
+            expression: 'location.href',
+            returnByValue: true,
+          },
+        );
+        const pattern = conditions.url.replace(/\*/g, '.*');
+        const regex = new RegExp(`^${pattern}$`);
+        if (!regex.test(result.result.value)) conditionMet = false;
+      }
+
+      if (conditionMet && conditions.fn !== undefined) {
+        const result = await this.cdp.send<{ result: { value: unknown } }>(
+          tabId,
+          'Runtime.evaluate',
+          {
+            expression: conditions.fn,
+            returnByValue: true,
+          },
+        );
+        if (!result.result.value) conditionMet = false;
+      }
+
+      if (conditionMet) {
+        return { success: true };
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+
+    return {
+      success: false,
+      error: `Wait timed out after ${timeoutMs}ms`,
+    };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -486,6 +581,15 @@ export class ActionExecutor {
             tabId,
             args.fields as FillField[],
           );
+        case 'wait':
+          return await this.wait(tabId, {
+            text: args.text as string | undefined,
+            textGone: args.textGone as string | undefined,
+            selector: args.selector as string | undefined,
+            url: args.url as string | undefined,
+            fn: args.fn as string | undefined,
+            timeoutMs: args.timeoutMs as number | undefined,
+          });
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
       }
