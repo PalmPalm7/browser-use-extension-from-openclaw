@@ -281,3 +281,30 @@
   - panel.ts placeholder created as empty export — US-024 will implement the logic
   - @crxjs/vite-plugin handles CSS bundling from HTML link tags automatically
 ---
+
+## 2026-03-18 - US-024
+- What was implemented: Side panel chat logic in src/sidepanel/panel.ts — port connection, message handling, and UI interaction
+- Files changed: src/sidepanel/panel.ts
+- **Learnings for future iterations:**
+  - chrome.runtime.connect({ name: 'agent-panel' }) establishes the port connection — name must match what service-worker.ts expects
+  - PanelMessage is imported as a type from background/types.ts — discriminated union on `type` field drives the switch handler
+  - port.onMessage listener receives PanelMessage objects; port.postMessage sends UserPromptMessage or StopMessage
+  - port.onDisconnect fires when the service worker or panel disconnects — show reconnect message and re-enable input
+  - Snapshot preview uses CSS class toggle pattern: .snapshot-content.open toggles display
+  - Status updates control both the status text/color AND the stop button visibility and input enabled state
+  - Auto-scroll to bottom: set messageLog.scrollTop = messageLog.scrollHeight after each append
+  - Enter key on input triggers send (with shift+enter prevention for future multiline support)
+  - chrome.runtime.openOptionsPage() opens the configured options page from the manifest
+---
+
+## 2026-03-18 - US-025
+- What was implemented: Options page with HTML form, CSS styling, and TypeScript load/save logic for LLM and agent configuration
+- Files changed: src/options/index.html, src/options/options.css, src/options/options.ts
+- **Learnings for future iterations:**
+  - LLM config stored under `llmConfig` key in chrome.storage.local (matches service-worker.ts loadConfig)
+  - Agent config (maxIterations, actionDelayMs) stored under separate `agentConfig` key to avoid polluting LLMConfig type
+  - Options page uses form submit event for save — prevents accidental page reload with e.preventDefault()
+  - Validation runs before save: URL protocol check, numeric range checks (maxTokens > 0, temp 0-2, iterations > 0, delay >= 0)
+  - Status message uses setTimeout to auto-clear after 2s for non-error messages
+  - @crxjs/vite-plugin bundles options.css and options.ts automatically from HTML link/script tags
+---
