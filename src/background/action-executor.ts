@@ -177,6 +177,49 @@ export class ActionExecutor {
     return { success: true };
   }
 
+  async navigate(tabId: number, url: string): Promise<ActionResult> {
+    // Validate URL
+    try {
+      new URL(url);
+    } catch {
+      return { success: false, error: `Invalid URL: ${url}` };
+    }
+
+    const response = await this.cdp.send<{ frameId: string; errorText?: string }>(
+      tabId,
+      'Page.navigate',
+      { url },
+    );
+
+    if (response.errorText) {
+      return { success: false, error: `Navigation failed: ${response.errorText}` };
+    }
+
+    // Wait for page load by polling document.readyState
+    const maxWaitMs = 15000;
+    const pollIntervalMs = 200;
+    const start = Date.now();
+
+    while (Date.now() - start < maxWaitMs) {
+      try {
+        const evalResult = await this.cdp.send<{ result: { value: string } }>(
+          tabId,
+          'Runtime.evaluate',
+          { expression: 'document.readyState', returnByValue: true },
+        );
+        if (evalResult.result.value === 'complete') {
+          return { success: true, data: { url } };
+        }
+      } catch {
+        // Page may not be ready for evaluation yet, keep polling
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+
+    // Timed out but navigation did start
+    return { success: true, data: { url } };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -200,6 +243,8 @@ export class ActionExecutor {
               slowly: args.slowly as boolean | undefined,
             },
           );
+        case 'navigate':
+          return await this.navigate(tabId, args.url as string);
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
       }
