@@ -484,7 +484,7 @@
         "Typecheck passes"
       ],
       "priority": 26,
-      "passes": false,
+      "passes": true,
       "notes": "This story is about fixing any integration issues that emerge when all pieces come together. May involve adjusting imports, fixing type mismatches, or tweaking vite config."
     }
   ]
