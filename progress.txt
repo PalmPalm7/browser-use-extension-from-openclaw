@@ -148,3 +148,14 @@
   - Arguments to Runtime.callFunctionOn use `arguments: [{value: values}]` format — values are passed as the first function parameter
   - Returns the list of actually selected option values in ActionResult.data.selected
 ---
+
+## 2026-03-18 - US-013
+- What was implemented: Fill (batch form fill) action method in ActionExecutor
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - fill() delegates to existing methods: click() for checkbox/radio, select() for dropdowns, type() for text inputs
+  - For checkbox/radio: use Runtime.callFunctionOn to read `this.checked` state, then click only if current state differs from desired value
+  - Desired boolean values parsed from string: "true" or "1" means checked
+  - FillField interface has {ref, type, value} — type determines which sub-action to use
+  - The fill method counts successfully processed fields and returns {filled: number}
+---

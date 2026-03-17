@@ -35,6 +35,12 @@ interface ScreenshotOptions {
   fullPage?: boolean;
 }
 
+interface FillField {
+  ref: string;
+  type: string;
+  value: string;
+}
+
 const KEY_CODE_MAP: Record<string, string> = {
   Enter: 'Enter',
   Tab: 'Tab',
@@ -389,6 +395,45 @@ export class ActionExecutor {
     return { success: true, data: { selected: result.result.value } };
   }
 
+  async fill(
+    tabId: number,
+    fields: FillField[],
+  ): Promise<ActionResult> {
+    let filled = 0;
+
+    for (const field of fields) {
+      if (field.type === 'checkbox' || field.type === 'radio') {
+        const entry = this.resolveRef(field.ref);
+        const objectId = await this.resolveObjectId(tabId, entry.backendNodeId);
+
+        const checkResult = await this.cdp.send<{ result: { value: boolean } }>(
+          tabId,
+          'Runtime.callFunctionOn',
+          {
+            objectId,
+            functionDeclaration: 'function() { return this.checked; }',
+            returnByValue: true,
+          },
+        );
+
+        const isChecked = checkResult.result.value;
+        const desired = field.value === 'true' || field.value === '1';
+
+        if (isChecked !== desired) {
+          await this.click(tabId, field.ref);
+        }
+      } else if (field.type === 'select') {
+        await this.select(tabId, field.ref, [field.value]);
+      } else {
+        await this.type(tabId, field.ref, field.value);
+      }
+
+      filled++;
+    }
+
+    return { success: true, data: { filled } };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -435,6 +480,11 @@ export class ActionExecutor {
             tabId,
             args.ref as string,
             args.values as string[],
+          );
+        case 'fill':
+          return await this.fill(
+            tabId,
+            args.fields as FillField[],
           );
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
