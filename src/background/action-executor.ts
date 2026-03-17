@@ -297,6 +297,62 @@ export class ActionExecutor {
     return { success: true };
   }
 
+  async drag(
+    tabId: number,
+    startRef: string,
+    endRef: string,
+  ): Promise<ActionResult> {
+    const startEntry = this.resolveRef(startRef);
+    const endEntry = this.resolveRef(endRef);
+
+    await this.cdp.send(tabId, 'DOM.scrollIntoViewIfNeeded', {
+      backendNodeId: startEntry.backendNodeId,
+    });
+
+    const start = await this.getElementCenter(tabId, startEntry.backendNodeId);
+    const end = await this.getElementCenter(tabId, endEntry.backendNodeId);
+
+    // Move to start position
+    await this.cdp.send(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: start.x,
+      y: start.y,
+    });
+
+    // Press at start position
+    await this.cdp.send(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: start.x,
+      y: start.y,
+      button: 'left',
+      clickCount: 1,
+    });
+
+    // Interpolate movement in ~10 steps
+    const steps = 10;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const x = start.x + (end.x - start.x) * t;
+      const y = start.y + (end.y - start.y) * t;
+      await this.cdp.send(tabId, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x,
+        y,
+      });
+    }
+
+    // Release at end position
+    await this.cdp.send(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: end.x,
+      y: end.y,
+      button: 'left',
+      clickCount: 1,
+    });
+
+    return { success: true };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -332,6 +388,12 @@ export class ActionExecutor {
           return await this.scroll(tabId, args.ref as string);
         case 'hover':
           return await this.hover(tabId, args.ref as string);
+        case 'drag':
+          return await this.drag(
+            tabId,
+            args.startRef as string,
+            args.endRef as string,
+          );
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
       }
