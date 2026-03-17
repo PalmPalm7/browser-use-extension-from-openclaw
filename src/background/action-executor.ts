@@ -35,6 +35,23 @@ interface ScreenshotOptions {
   fullPage?: boolean;
 }
 
+const KEY_CODE_MAP: Record<string, string> = {
+  Enter: 'Enter',
+  Tab: 'Tab',
+  Escape: 'Escape',
+  Backspace: 'Backspace',
+  Delete: 'Delete',
+  ArrowUp: 'ArrowUp',
+  ArrowDown: 'ArrowDown',
+  ArrowLeft: 'ArrowLeft',
+  ArrowRight: 'ArrowRight',
+  Home: 'Home',
+  End: 'End',
+  PageUp: 'PageUp',
+  PageDown: 'PageDown',
+  ' ': 'Space',
+};
+
 export class ActionExecutor {
   private cdp: CDPManager;
   private refMap: RefMap = new Map();
@@ -242,6 +259,44 @@ export class ActionExecutor {
     return { success: true, data: { base64: result.data } };
   }
 
+  async press(tabId: number, key: string): Promise<ActionResult> {
+    const code = KEY_CODE_MAP[key] ?? `Key${key.toUpperCase()}`;
+
+    await this.cdp.send(tabId, 'Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key,
+      code,
+    });
+    await this.cdp.send(tabId, 'Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key,
+      code,
+    });
+
+    return { success: true };
+  }
+
+  async scroll(tabId: number, ref: string): Promise<ActionResult> {
+    const entry = this.resolveRef(ref);
+    await this.cdp.send(tabId, 'DOM.scrollIntoViewIfNeeded', {
+      backendNodeId: entry.backendNodeId,
+    });
+    return { success: true };
+  }
+
+  async hover(tabId: number, ref: string): Promise<ActionResult> {
+    const entry = this.resolveRef(ref);
+    const { x, y } = await this.getElementCenter(tabId, entry.backendNodeId);
+
+    await this.cdp.send(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x,
+      y,
+    });
+
+    return { success: true };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -271,6 +326,12 @@ export class ActionExecutor {
           return await this.screenshot(tabId, {
             fullPage: args.fullPage as boolean | undefined,
           });
+        case 'press':
+          return await this.press(tabId, args.key as string);
+        case 'scroll':
+          return await this.scroll(tabId, args.ref as string);
+        case 'hover':
+          return await this.hover(tabId, args.ref as string);
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
       }
