@@ -41,7 +41,7 @@ browser-use-extension/
 User types prompt in Side Panel
     |
     v
-Side Panel sends message to Service Worker (chrome.runtime.sendMessage)
+Side Panel connects to Service Worker via chrome.runtime.connect (persistent port)
     |
     v
 Service Worker starts Agent Loop:
@@ -57,28 +57,64 @@ Service Worker starts Agent Loop:
     10. Repeat until LLM returns text response (no tool calls) or user stops
     |
     v
-Side Panel receives real-time status updates via chrome.runtime.onMessage
+Side Panel receives real-time status updates via port.onMessage
 ```
 
-### Permissions
+### Manifest
+
+Complete `manifest.json` structure:
 
 ```json
 {
+  "manifest_version": 3,
+  "name": "Browser Use",
+  "version": "0.1.0",
+  "description": "AI-powered browser automation via natural language",
   "permissions": [
     "debugger",
     "activeTab",
     "tabs",
     "sidePanel",
     "storage"
-  ]
+  ],
+  "host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/index.html"
+  },
+  "options_page": "options/index.html",
+  "action": {
+    "default_title": "Browser Use",
+    "default_icon": {
+      "16": "icons/16.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
 }
 ```
 
+**Permissions:**
 - `debugger` — CDP access via `chrome.debugger` (core of all browser automation)
 - `activeTab` — access the current tab
 - `tabs` — list/open/close/focus tabs
 - `sidePanel` — persistent side panel UI
 - `storage` — persist API settings
+
+**Host permissions:**
+- `https://*/*` and `http://*/*` — required for the service worker to make cross-origin `fetch()` calls to the LLM API. Without these, API calls fail. The broad wildcard triggers a permission warning at install; this is acceptable since the extension needs to reach any user-configured API endpoint.
+
+**Minimum Chrome version:** 118+ (required for `chrome.debugger` to keep the service worker alive during debugging sessions).
 
 ## Component Details
 
@@ -112,6 +148,16 @@ class CDPManager {
 - Auto-detaches on tab close or navigation away
 - Listens to `chrome.debugger.onEvent` for CDP events (console, network, etc.)
 - Listens to `chrome.debugger.onDetach` to clean up state
+
+**Domain initialization:** After attaching to a tab, the CDP Manager must enable required domains before use:
+```
+Accessibility.enable()   — required for stable AXNodeId values in getFullAXTree
+Page.enable()            — required for Page events (loadEventFired, frameStoppedLoading)
+Network.enable()         — required when using cookie features
+```
+This happens automatically in the `attach()` method.
+
+**Note on Accessibility domain:** The `Accessibility` CDP domain (including `getFullAXTree`) is marked as **Experimental** in the CDP protocol spec. In practice, Chrome ships these methods and they are widely used. The implementation should handle unexpected response shapes gracefully in case of future changes.
 
 **CDP domains used:**
 
@@ -206,18 +252,23 @@ Executes browser actions using the ref map from the snapshot. Equivalent to Open
 
 ```
 1. Look up ref in RefMap → get backendNodeId
-2. DOM.resolveNode({backendNodeId}) → get objectId
-3. DOM.getBoxModel({backendNodeId}) → get bounding box
-4. Calculate center coordinates: x = box.x + box.width/2, y = box.y + box.height/2
+2. DOM.resolveNode({backendNodeId}) → get objectId (for Runtime.callFunctionOn)
+3. DOM.getBoxModel({backendNodeId}) → get BoxModel
+4. Extract center from content quad:
+     const quad = boxModel.model.content;  // [x1,y1, x2,y2, x3,y3, x4,y4]
+     const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+     const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
 5. Dispatch input events at (x, y)
 ```
+
+**Note:** `DOM.getBoxModel` returns `{model: {content, padding, border, margin, width, height}}` where each geometry field is a `Quad` — an array of 8 numbers representing 4 corner points as `[x1,y1, x2,y2, x3,y3, x4,y4]`. This center-point calculation is used by `click`, `hover`, and `drag`.
 
 **Action implementations:**
 
 #### click(ref, options?)
 ```
 DOM.scrollIntoViewIfNeeded({backendNodeId})
-DOM.getBoxModel({backendNodeId}) → {x, y}
+DOM.getBoxModel({backendNodeId}) → extract center (x, y) from content quad
 Input.dispatchMouseEvent({type: "mouseMoved", x, y})
 Input.dispatchMouseEvent({type: "mousePressed", x, y, button: "left", clickCount: 1})
 Input.dispatchMouseEvent({type: "mouseReleased", x, y, button: "left", clickCount: 1})
@@ -245,10 +296,11 @@ Page.navigate({url})
 
 #### screenshot(options?)
 ```
-Page.captureScreenshot({format: "png", quality: 80})
+Page.captureScreenshot({format: "png"})
 → returns base64 string
 ```
-Options: `fullPage` (capture entire scrollable area), `clip` (capture specific region)
+Options: `fullPage` (capture entire scrollable area via `captureBeyondViewport: true`), `clip` (capture specific region)
+Note: PNG is lossless; `quality` parameter only applies to JPEG format.
 
 #### press(key)
 ```
@@ -264,14 +316,14 @@ DOM.scrollIntoViewIfNeeded({backendNodeId})
 
 #### hover(ref)
 ```
-DOM.getBoxModel({backendNodeId}) → {x, y}
+DOM.getBoxModel({backendNodeId}) → extract center (x, y) from content quad
 Input.dispatchMouseEvent({type: "mouseMoved", x, y})
 ```
 
 #### drag(startRef, endRef)
 ```
-getBoxModel(startRef) → {x1, y1}
-getBoxModel(endRef) → {x2, y2}
+getBoxModel(startRef) → extract center (x1, y1) from content quad
+getBoxModel(endRef) → extract center (x2, y2) from content quad
 Input.dispatchMouseEvent({type: "mousePressed", x: x1, y: y1, button: "left"})
 # Move in steps for realistic drag:
 for step in interpolate(x1,y1 → x2,y2):
@@ -348,7 +400,7 @@ Page.printToPDF({}) → base64 string → download via blob URL
 
 Connects to any OpenAI-compatible chat completions endpoint.
 
-**Configuration (persisted in chrome.storage.sync):**
+**Configuration (persisted in chrome.storage.local):**
 
 ```typescript
 interface LLMConfig {
@@ -831,14 +883,38 @@ Minimal chat interface for the kernel. Just enough to drive the agent.
 - **Stop button** — visible when agent is running, sends stop signal
 - **Settings gear** — opens options page
 
-**Communication:**
-- `chrome.runtime.sendMessage({type: 'user_prompt', text})` — send prompt to service worker
-- `chrome.runtime.onMessage` listener for updates:
-  - `{type: 'status', status: 'thinking' | 'acting' | 'idle' | 'error'}`
-  - `{type: 'action', tool: string, args: object}` — agent is executing a tool
-  - `{type: 'agent_message', text: string}` — agent's final response
-  - `{type: 'error', text: string}` — error message
-  - `{type: 'snapshot_preview', text: string}` — optional: show truncated snapshot
+**Communication (persistent port):**
+
+Uses `chrome.runtime.connect` for a persistent bidirectional channel (not `sendMessage` per-message):
+
+```typescript
+// Side panel connects on open:
+const port = chrome.runtime.connect({ name: 'agent-panel' });
+
+// Send prompt:
+port.postMessage({ type: 'user_prompt', text: '...' });
+
+// Receive updates:
+port.onMessage.addListener((msg) => { /* handle status, actions, etc. */ });
+
+// Service worker listens:
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'agent-panel') { /* register panel port */ }
+});
+
+// Clean shutdown when side panel closes:
+port.onDisconnect.addListener(() => { /* stop agent loop, cleanup */ });
+```
+
+**Message types (both directions):**
+- `{type: 'user_prompt', text: string}` — user sends a prompt
+- `{type: 'stop'}` — user stops the agent loop
+- `{type: 'status', status: 'thinking' | 'acting' | 'idle' | 'error'}` — agent status
+- `{type: 'action', tool: string, args: object}` — agent is executing a tool
+- `{type: 'action_result', tool: string, success: boolean, data?: unknown, error?: string}` — tool result
+- `{type: 'agent_message', text: string}` — agent's final response
+- `{type: 'error', text: string}` — error message
+- `{type: 'snapshot_preview', text: string}` — truncated snapshot for display
 
 ### 8. Options Page (`options/`)
 
@@ -853,7 +929,7 @@ Simple form to configure the LLM connection.
 - Max Iterations (number input, default: 50)
 - Action Delay (number input in ms, default: 500)
 
-**Storage:** `chrome.storage.sync` — syncs across devices if user is signed into Chrome.
+**Storage:** `chrome.storage.local` for non-sensitive settings (base URL, model name, max tokens, temperature). API key stored in `chrome.storage.local` with a note in the UI that it is stored unencrypted on disk.
 
 ## Build System
 
@@ -881,12 +957,42 @@ npm run build    # Production build
 
 ## Security Considerations
 
-- API keys stored in `chrome.storage.sync` (encrypted by Chrome)
-- `evaluate` tool executes arbitrary JS in page context — document risk in system prompt, consider making it optional via settings
-- The debugger permission shows a banner to the user — this is a feature (transparency)
-- No content scripts needed — all interaction via CDP through chrome.debugger
-- No external dependencies = no supply chain risk
-- CORS is not an issue: service workers can make cross-origin fetch requests
+- **API key storage:** Keys are stored in `chrome.storage.local` (unencrypted on disk). `chrome.storage.sync` is not encrypted. A future improvement could use `chrome.storage.session` (in-memory, cleared on restart) with an opt-in "remember key" toggle that falls back to `storage.local`.
+- **`evaluate` tool:** Executes arbitrary JS in the page context. This is disabled by default in settings. When enabled, the system prompt warns the LLM about the security implications. The tool can access cookies, localStorage, and make network requests as the page's origin.
+- The debugger permission shows a banner to the user — this is a feature (transparency).
+- No content scripts needed — all interaction via CDP through chrome.debugger.
+- No external dependencies = no supply chain risk.
+- **Cross-origin fetch:** Service workers can make cross-origin `fetch()` calls only when `host_permissions` are declared in the manifest (which we do). This is what enables reaching any user-configured LLM API endpoint.
+
+### Service Worker Lifecycle
+
+Manifest V3 service workers are terminated after 30 seconds of inactivity and have a 5-minute maximum runtime. However:
+
+- **Chrome 118+** keeps the service worker alive while a `chrome.debugger` session is attached. Since the agent loop always has the debugger attached during operation, the service worker survives for the duration of the task.
+- **Between tasks:** When the debugger is detached and the service worker could be terminated, conversation history is persisted to `chrome.storage.session` so it survives restart.
+- **On unexpected termination:** The `chrome.debugger.onDetach` event fires if the debugger disconnects. The service worker handles this by saving state and notifying the side panel.
+
+### Action Result Format
+
+All tool executions return a structured result for the LLM:
+
+```typescript
+interface ActionResult {
+  success: boolean;
+  data?: unknown;      // Action-specific return value
+  error?: string;      // Human-readable error for the LLM to reason about
+}
+```
+
+This gives the LLM clear feedback on failures (e.g., "ref e5 not found — element may have changed, take a new snapshot") so it can recover.
+
+### Snapshot Size Management
+
+Complex pages can produce accessibility trees exceeding LLM context limits. Mitigation:
+- Configurable `maxDepth` (default: 10) and `maxChars` (default: 30000) for snapshots
+- Depth-first traversal with a character budget, prioritizing interactive elements
+- If truncated, the snapshot includes a note: `[truncated — {N} more elements not shown]`
+- The agent can request a scoped snapshot of a specific subtree via the `evaluate` tool if needed
 
 ## Out of Scope (v1)
 
