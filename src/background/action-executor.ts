@@ -50,6 +50,29 @@ interface WaitConditions {
   timeoutMs?: number;
 }
 
+interface CookieSetParams {
+  name: string;
+  value: string;
+  url?: string;
+  domain?: string;
+  path?: string;
+  secure?: boolean;
+  httpOnly?: boolean;
+}
+
+interface CookieEntry {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  size: number;
+  httpOnly: boolean;
+  secure: boolean;
+  session: boolean;
+  sameSite?: string;
+}
+
 const KEY_CODE_MAP: Record<string, string> = {
   Enter: 'Enter',
   Tab: 'Tab',
@@ -615,6 +638,71 @@ export class ActionExecutor {
     };
   }
 
+  async cookiesGet(tabId: number): Promise<ActionResult> {
+    const urlResult = await this.cdp.send<{ result: { value: string } }>(
+      tabId,
+      'Runtime.evaluate',
+      { expression: 'location.href', returnByValue: true },
+    );
+    const currentUrl = urlResult.result.value;
+
+    const result = await this.cdp.send<{ cookies: CookieEntry[] }>(
+      tabId,
+      'Network.getCookies',
+      { urls: [currentUrl] },
+    );
+
+    return { success: true, data: result.cookies };
+  }
+
+  async cookiesSet(tabId: number, params: CookieSetParams): Promise<ActionResult> {
+    if (!params.url) {
+      const urlResult = await this.cdp.send<{ result: { value: string } }>(
+        tabId,
+        'Runtime.evaluate',
+        { expression: 'location.href', returnByValue: true },
+      );
+      params.url = urlResult.result.value;
+    }
+
+    await this.cdp.send(tabId, 'Network.setCookie', {
+      name: params.name,
+      value: params.value,
+      url: params.url,
+      domain: params.domain,
+      path: params.path,
+      secure: params.secure,
+      httpOnly: params.httpOnly,
+    });
+
+    return { success: true };
+  }
+
+  async cookiesClear(tabId: number): Promise<ActionResult> {
+    const urlResult = await this.cdp.send<{ result: { value: string } }>(
+      tabId,
+      'Runtime.evaluate',
+      { expression: 'location.href', returnByValue: true },
+    );
+    const currentUrl = urlResult.result.value;
+
+    const result = await this.cdp.send<{ cookies: CookieEntry[] }>(
+      tabId,
+      'Network.getCookies',
+      { urls: [currentUrl] },
+    );
+
+    for (const cookie of result.cookies) {
+      await this.cdp.send(tabId, 'Network.deleteCookies', {
+        name: cookie.name,
+        domain: cookie.domain,
+        path: cookie.path,
+      });
+    }
+
+    return { success: true };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -690,6 +778,20 @@ export class ActionExecutor {
           return await this.tabClose(args.tabId as number);
         case 'tab_focus':
           return await this.tabFocus(args.tabId as number);
+        case 'cookies_get':
+          return await this.cookiesGet(tabId);
+        case 'cookies_set':
+          return await this.cookiesSet(tabId, {
+            name: args.name as string,
+            value: args.value as string,
+            url: args.url as string | undefined,
+            domain: args.domain as string | undefined,
+            path: args.path as string | undefined,
+            secure: args.secure as boolean | undefined,
+            httpOnly: args.httpOnly as boolean | undefined,
+          });
+        case 'cookies_clear':
+          return await this.cookiesClear(tabId);
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
       }

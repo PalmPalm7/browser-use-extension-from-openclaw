@@ -181,3 +181,26 @@
   - Both Runtime.evaluate and Runtime.callFunctionOn use returnByValue: true to get serializable results
   - Error extraction chain: exceptionDetails.exception.description ?? exceptionDetails.text ?? fallback
 ---
+
+## 2026-03-18 - US-016
+- What was implemented: Tab operation methods (tabList, tabOpen, tabClose, tabFocus) in ActionExecutor
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Tab operations use chrome.tabs API (not CDP) — these are Promise-based in MV3
+  - tabClose should detach the debugger (via cdp.detach) before removing the tab
+  - tabFocus should attach the debugger (via cdp.attach) if not already attached, to prepare for subsequent CDP operations
+  - Tab methods don't need the current tabId from the dispatcher — tabList has no params, tabOpen takes a url, tabClose/tabFocus take their own tabId arg
+  - In execute() dispatcher, tab_close and tab_focus pass args.tabId (not the dispatcher's tabId parameter)
+---
+
+## 2026-03-18 - US-017
+- What was implemented: Cookie management methods (cookiesGet, cookiesSet, cookiesClear) in ActionExecutor
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Network.getCookies takes {urls: string[]} and returns {cookies: CookieEntry[]} — must provide the current page URL
+  - Network.setCookie takes {name, value, url, domain?, path?, secure?, httpOnly?} — url falls back to current page URL if not provided
+  - Network.deleteCookies takes {name, domain, path} — iterate all cookies from getCookies to clear them all
+  - Cookie methods use Runtime.evaluate('location.href') to get the current URL (same pattern as navigate/wait)
+  - CookieEntry and CookieSetParams interfaces defined locally alongside other CDP response types
+  - cookies_get needs no args beyond tabId; cookies_set takes params object; cookies_clear needs no args beyond tabId
+---
