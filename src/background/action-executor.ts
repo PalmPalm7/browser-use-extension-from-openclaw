@@ -529,6 +529,54 @@ export class ActionExecutor {
     };
   }
 
+  async evaluate(
+    tabId: number,
+    fn: string,
+    ref?: string,
+  ): Promise<ActionResult> {
+    if (ref) {
+      const entry = this.resolveRef(ref);
+      const objectId = await this.resolveObjectId(tabId, entry.backendNodeId);
+
+      const result = await this.cdp.send<{
+        result: { value: unknown };
+        exceptionDetails?: { exception?: { description?: string }; text?: string };
+      }>(tabId, 'Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: fn,
+        returnByValue: true,
+      });
+
+      if (result.exceptionDetails) {
+        const msg =
+          result.exceptionDetails.exception?.description ??
+          result.exceptionDetails.text ??
+          'Unknown evaluation error';
+        return { success: false, error: msg };
+      }
+
+      return { success: true, data: result.result.value };
+    }
+
+    const result = await this.cdp.send<{
+      result: { value: unknown };
+      exceptionDetails?: { exception?: { description?: string }; text?: string };
+    }>(tabId, 'Runtime.evaluate', {
+      expression: fn,
+      returnByValue: true,
+    });
+
+    if (result.exceptionDetails) {
+      const msg =
+        result.exceptionDetails.exception?.description ??
+        result.exceptionDetails.text ??
+        'Unknown evaluation error';
+      return { success: false, error: msg };
+    }
+
+    return { success: true, data: result.result.value };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -590,6 +638,12 @@ export class ActionExecutor {
             fn: args.fn as string | undefined,
             timeoutMs: args.timeoutMs as number | undefined,
           });
+        case 'evaluate':
+          return await this.evaluate(
+            tabId,
+            args.fn as string,
+            args.ref as string | undefined,
+          );
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
       }

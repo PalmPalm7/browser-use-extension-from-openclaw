@@ -159,3 +159,25 @@
   - FillField interface has {ref, type, value} — type determines which sub-action to use
   - The fill method counts successfully processed fields and returns {filled: number}
 ---
+
+## 2026-03-18 - US-014
+- What was implemented: Wait action method in ActionExecutor with text, textGone, selector, url, and fn condition polling
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - wait() polls multiple conditions simultaneously — all must be true for the wait to succeed
+  - Use JSON.stringify() to safely embed string values in Runtime.evaluate expressions (prevents injection)
+  - URL matching uses simple glob-to-regex conversion: replace * with .* and wrap in ^...$
+  - WaitConditions interface has optional timeoutMs (default 10000) and pollIntervalMs is hardcoded at 200ms
+  - Each condition check uses Runtime.evaluate with returnByValue: true for primitive results
+  - On timeout, returns ActionResult with success: false and descriptive error message
+---
+
+## 2026-03-18 - US-015
+- What was implemented: Evaluate action method in ActionExecutor for executing JavaScript in the page context
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - evaluate() has two modes: with ref (Runtime.callFunctionOn with objectId) and without ref (Runtime.evaluate with expression)
+  - CDP Runtime responses include optional exceptionDetails with exception.description and text fields for error reporting
+  - Both Runtime.evaluate and Runtime.callFunctionOn use returnByValue: true to get serializable results
+  - Error extraction chain: exceptionDetails.exception.description ?? exceptionDetails.text ?? fallback
+---
