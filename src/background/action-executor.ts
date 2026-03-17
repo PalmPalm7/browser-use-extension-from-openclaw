@@ -26,6 +26,11 @@ interface ClickOptions {
   modifiers?: number;
 }
 
+interface TypeOptions {
+  submit?: boolean;
+  slowly?: boolean;
+}
+
 export class ActionExecutor {
   private cdp: CDPManager;
   private refMap: RefMap = new Map();
@@ -118,6 +123,60 @@ export class ActionExecutor {
     return { success: true };
   }
 
+  async type(
+    tabId: number,
+    ref: string,
+    text: string,
+    options?: TypeOptions,
+  ): Promise<ActionResult> {
+    const entry = this.resolveRef(ref);
+    const { backendNodeId } = entry;
+
+    // Focus the element
+    await this.cdp.send(tabId, 'DOM.focus', { backendNodeId });
+
+    // Clear existing value
+    const objectId = await this.resolveObjectId(tabId, backendNodeId);
+    await this.cdp.send(tabId, 'Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration:
+        "function(){this.value='';this.dispatchEvent(new Event('input',{bubbles:true}))}",
+    });
+
+    // Type text
+    if (options?.slowly) {
+      for (const char of text) {
+        await this.cdp.send(tabId, 'Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          key: char,
+          text: char,
+        });
+        await this.cdp.send(tabId, 'Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: char,
+        });
+      }
+    } else {
+      await this.cdp.send(tabId, 'Input.insertText', { text });
+    }
+
+    // Submit if requested
+    if (options?.submit) {
+      await this.cdp.send(tabId, 'Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: 'Enter',
+        code: 'Enter',
+      });
+      await this.cdp.send(tabId, 'Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: 'Enter',
+        code: 'Enter',
+      });
+    }
+
+    return { success: true };
+  }
+
   async execute(
     tabId: number,
     toolName: string,
@@ -131,6 +190,16 @@ export class ActionExecutor {
             button: args.button as MouseButton | undefined,
             modifiers: args.modifiers as number | undefined,
           });
+        case 'type':
+          return await this.type(
+            tabId,
+            args.ref as string,
+            args.text as string,
+            {
+              submit: args.submit as boolean | undefined,
+              slowly: args.slowly as boolean | undefined,
+            },
+          );
         default:
           return { success: false, error: `Unknown action: ${toolName}` };
       }

@@ -1,0 +1,95 @@
+## Codebase Patterns
+- Build: `npm run build` (vite), `npm run typecheck` (tsc --noEmit), `npm run dev` (vite dev)
+- @crxjs/vite-plugin@beta (v2) handles manifest rewriting and service worker loader generation
+- manifest.json at project root is the source; crxjs rewrites paths in dist/manifest.json
+- Icons at public/icons/{16,48,128}.png — crxjs copies them into dist/
+- TypeScript: ES2022 target, strict, ESNext modules, bundler resolution
+- No UI framework — vanilla TS/HTML/CSS
+- Shared types in `src/background/types.ts` — import from there for all interfaces
+- AXNode response from Accessibility.getFullAXTree wraps role/name/value in {type, value} objects
+- Only increase indentation depth when a node receives a ref assignment
+- ActionExecutor.execute() is a switch dispatcher — add new action cases as they're implemented
+- CDP response types need local interfaces (BoxModelResponse, ResolveNodeResponse, etc.) since @types/chrome doesn't type sendCommand results
+
+---
+
+## 2026-03-18 - US-001
+- What was implemented: Project scaffolding with Vite + @crxjs/vite-plugin + TypeScript
+- Files changed: package.json, tsconfig.json, manifest.json, vite.config.ts, .gitignore, src/background/service-worker.ts, src/sidepanel/index.html, src/options/index.html, public/icons/{16,48,128}.png
+- **Learnings for future iterations:**
+  - @crxjs/vite-plugin v2 beta works with Vite 5 out of the box
+  - crxjs generates a service-worker-loader.js that imports the actual compiled service worker
+  - @types/chrome provides chrome.* API typings needed for extension development
+  - manifest.json uses source paths (src/...) — crxjs rewrites them in dist/
+---
+
+## 2026-03-18 - US-002
+- What was implemented: Shared TypeScript type definitions in src/background/types.ts
+- Files changed: src/background/types.ts
+- **Learnings for future iterations:**
+  - ChatMessage is a discriminated union on `role` field: system, user, assistant, tool
+  - OpenAI multi-part content format uses ContentPart[] (TextContent | ImageUrlContent) for user messages with vision
+  - PanelMessage is a discriminated union on `type` field for all side panel <-> service worker messages
+  - RefMap is Map<string, RefEntry> — refs like "e1", "e2" map to node metadata including backendNodeId
+---
+
+## 2026-03-18 - US-003
+- What was implemented: CDPManager class in src/background/cdp-manager.ts wrapping chrome.debugger API
+- Files changed: src/background/cdp-manager.ts
+- **Learnings for future iterations:**
+  - chrome.debugger APIs are callback-based — wrap in Promises for clean async interface
+  - chrome.debugger.attach takes protocol version string "1.3"
+  - After attach, enable required CDP domains: Accessibility.enable, Page.enable, Network.enable
+  - chrome.debugger.onDetach fires with a reason string — use to clean up tracking set
+  - chrome.debugger.onEvent delivers CDP events (method + params) — fan out to registered callbacks
+  - sendCommand result needs cast to T since the callback types it as object | undefined
+  - Prevent double-attach by checking tracking set before calling attach
+---
+
+## 2026-03-18 - US-004
+- What was implemented: SnapshotEngine class in src/background/snapshot-engine.ts
+- Files changed: src/background/snapshot-engine.ts
+- **Learnings for future iterations:**
+  - Accessibility.getFullAXTree returns flat array of AXNode objects with nodeId, childIds, role, name, value, properties
+  - AXNode role/name/value are wrapped in {type, value} objects, not plain strings
+  - Ignored nodes should still have their children walked (they act as transparent containers)
+  - Only increase tree depth when a node gets a ref (otherwise indentation inflates for no-ref structural nodes)
+  - Page.captureScreenshot returns {data: base64string} — the property is `data` not `screenshotBase64`
+  - Use Runtime.evaluate to get page URL/title rather than CDP Page domain methods
+  - VALUE_ROLES (textbox, combobox, searchbox, slider, spinbutton) are the roles that display value= in snapshot text
+---
+
+## 2026-03-18 - US-005
+- What was implemented: ActionExecutor class in src/background/action-executor.ts with base methods for ref resolution and element interaction
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - DOM.getBoxModel returns {model: {content: number[]}} where content is a Quad [x1,y1, x2,y2, x3,y3, x4,y4] — center is average of x/y pairs
+  - DOM.resolveNode({backendNodeId}) returns {object: {objectId}} — objectId is needed for Runtime.callFunctionOn
+  - ActionExecutor.execute is a dispatcher switch — each subsequent US adds cases to it
+  - refMap is ephemeral — must be updated via setRefMap() after every new snapshot
+  - Keep execute() try/catch wrapping all action methods so they always return ActionResult
+---
+
+## 2026-03-18 - US-006
+- What was implemented: Click action method in ActionExecutor with scroll-into-view, center calculation, and 3-event mouse dispatch
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Click requires 3 CDP events in sequence: mouseMoved → mousePressed → mouseReleased
+  - DOM.scrollIntoViewIfNeeded takes {backendNodeId} to scroll element into viewport before interaction
+  - Input.dispatchMouseEvent uses CDP mouse button names: 'left', 'right', 'middle'
+  - Modifier bitmask: Alt=1, Control=2, Meta=4, Shift=8
+  - Define option types (ClickOptions, MouseButton) near the top of the file alongside CDP response interfaces
+  - In execute() dispatcher, cast args to the correct types when passing to action methods
+---
+
+## 2026-03-18 - US-007
+- What was implemented: Type action method in ActionExecutor with focus, value clear, text input, and optional submit/slowly modes
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - DOM.focus({backendNodeId}) focuses an element without needing to resolve objectId first
+  - To clear an input's value, use Runtime.callFunctionOn with objectId — must resolve objectId via DOM.resolveNode
+  - Input.insertText({text}) types all text at once — efficient for normal usage
+  - For "slowly" mode, dispatch individual keyDown/keyUp per character with `text` property on keyDown
+  - Submit is implemented as Enter keyDown + keyUp via Input.dispatchKeyEvent with key and code both set to "Enter"
+  - TypeOptions interface follows same pattern as ClickOptions — define near top of file
+---
