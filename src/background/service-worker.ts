@@ -10,13 +10,13 @@ const snapshotEngine = new SnapshotEngine(cdp);
 const actionExecutor = new ActionExecutor(cdp);
 
 const DEFAULT_CONFIG: LLMConfig = {
-  apiBaseUrl: 'https://api.openai.com/v1',
+  apiBaseUrl: 'https://api.minimax.io/v1',
   apiKey: '',
-  modelName: 'gpt-4o',
-  maxTokens: 4096,
-  temperature: 0.2,
+  modelName: 'MiniMax-M2.5',
+  maxTokens: 131072,
+  temperature: 1.0,
   screenshotDetail: 'low',
-  visionEnabled: true,
+  visionEnabled: false,
 };
 
 async function loadConfig(): Promise<LLMConfig> {

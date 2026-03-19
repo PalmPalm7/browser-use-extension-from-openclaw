@@ -1,17 +1,86 @@
+// --- Provider presets ---
+
+interface ProviderPreset {
+  apiBaseUrl: string;
+  modelName: string;
+  maxTokens: number;
+  temperature: number;
+  visionEnabled: boolean;
+  screenshotDetail: 'low' | 'high';
+  supportsVision: boolean;
+  infoText: string;
+}
+
+const PRESETS: Record<string, ProviderPreset> = {
+  minimax: {
+    apiBaseUrl: 'https://api.minimax.io/v1',
+    modelName: 'MiniMax-M2.5',
+    maxTokens: 131072,
+    temperature: 1.0,
+    visionEnabled: false,
+    screenshotDetail: 'low',
+    supportsVision: false,
+    infoText: 'MiniMax-M2.5 \u00b7 200K ctx \u00b7 131K out \u00b7 Text only \u00b7 $0.15/1M in',
+  },
+  openai: {
+    apiBaseUrl: 'https://api.openai.com/v1',
+    modelName: 'gpt-5.3-codex',
+    maxTokens: 128000,
+    temperature: 1.0,
+    visionEnabled: true,
+    screenshotDetail: 'high',
+    supportsVision: true,
+    infoText: 'gpt-5.3-codex \u00b7 400K ctx \u00b7 128K out \u00b7 Vision \u00b7 Reasoning model',
+  },
+  anthropic: {
+    apiBaseUrl: 'https://api.anthropic.com/v1/',
+    modelName: 'claude-opus-4-6',
+    maxTokens: 128000,
+    temperature: 0.2,
+    visionEnabled: true,
+    screenshotDetail: 'high',
+    supportsVision: true,
+    infoText: 'claude-opus-4-6 \u00b7 1M ctx \u00b7 128K out \u00b7 Vision \u00b7 $5/1M in',
+  },
+  google: {
+    apiBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    modelName: 'gemini-3.1-pro-preview',
+    maxTokens: 65536,
+    temperature: 1.0,
+    visionEnabled: true,
+    screenshotDetail: 'high',
+    supportsVision: true,
+    infoText: 'gemini-3.1-pro-preview \u00b7 1M ctx \u00b7 65K out \u00b7 Vision \u00b7 $2/1M in',
+  },
+  openrouter: {
+    apiBaseUrl: 'https://openrouter.ai/api/v1',
+    modelName: 'minimax/minimax-m2.5',
+    maxTokens: 131072,
+    temperature: 1.0,
+    visionEnabled: false,
+    screenshotDetail: 'low',
+    supportsVision: false,
+    infoText: 'minimax/minimax-m2.5 \u00b7 Any model via OpenRouter \u00b7 openrouter.ai',
+  },
+};
+
 const DEFAULTS = {
-  apiBaseUrl: 'https://api.openai.com/v1',
+  preset: 'minimax',
+  apiBaseUrl: 'https://api.minimax.io/v1',
   apiKey: '',
-  modelName: 'gpt-4o',
-  maxTokens: 4096,
-  temperature: 0.2,
+  modelName: 'MiniMax-M2.5',
+  maxTokens: 131072,
+  temperature: 1.0,
   screenshotDetail: 'low' as const,
-  visionEnabled: true,
+  visionEnabled: false,
   maxIterations: 50,
   actionDelayMs: 500,
 };
 
 // --- DOM elements ---
 const form = document.getElementById('config-form') as HTMLFormElement;
+const presetSelect = document.getElementById('providerPreset') as HTMLSelectElement;
+const presetInfo = document.getElementById('preset-info') as HTMLSpanElement;
 const apiBaseUrlInput = document.getElementById('apiBaseUrl') as HTMLInputElement;
 const apiKeyInput = document.getElementById('apiKey') as HTMLInputElement;
 const modelNameInput = document.getElementById('modelName') as HTMLInputElement;
@@ -23,12 +92,44 @@ const maxIterationsInput = document.getElementById('maxIterations') as HTMLInput
 const actionDelayInput = document.getElementById('actionDelay') as HTMLInputElement;
 const statusMsg = document.getElementById('status-msg') as HTMLSpanElement;
 
+// --- Apply preset values to form ---
+function applyPreset(key: string): void {
+  const preset = PRESETS[key];
+  if (!preset) {
+    presetInfo.textContent = '';
+    visionEnabledInput.disabled = false;
+    return;
+  }
+
+  apiBaseUrlInput.value = preset.apiBaseUrl;
+  modelNameInput.value = preset.modelName;
+  maxTokensInput.value = String(preset.maxTokens);
+  temperatureInput.value = String(preset.temperature);
+  screenshotDetailSelect.value = preset.screenshotDetail;
+  visionEnabledInput.checked = preset.visionEnabled;
+  visionEnabledInput.disabled = !preset.supportsVision;
+  presetInfo.textContent = preset.infoText;
+}
+
+// --- Update preset info without changing form values ---
+function updatePresetInfo(key: string): void {
+  const preset = PRESETS[key];
+  presetInfo.textContent = preset?.infoText ?? '';
+  visionEnabledInput.disabled = preset ? !preset.supportsVision : false;
+}
+
+// --- Preset change handler ---
+presetSelect.addEventListener('change', () => {
+  applyPreset(presetSelect.value);
+});
+
 // --- Load config from storage and populate form ---
 async function loadConfig(): Promise<void> {
   const stored = await chrome.storage.local.get(['llmConfig', 'agentConfig']);
   const llm = stored.llmConfig || {};
   const agent = stored.agentConfig || {};
 
+  presetSelect.value = llm.preset ?? DEFAULTS.preset;
   apiBaseUrlInput.value = llm.apiBaseUrl ?? DEFAULTS.apiBaseUrl;
   apiKeyInput.value = llm.apiKey ?? DEFAULTS.apiKey;
   modelNameInput.value = llm.modelName ?? DEFAULTS.modelName;
@@ -38,6 +139,8 @@ async function loadConfig(): Promise<void> {
   visionEnabledInput.checked = llm.visionEnabled ?? DEFAULTS.visionEnabled;
   maxIterationsInput.value = String(agent.maxIterations ?? DEFAULTS.maxIterations);
   actionDelayInput.value = String(agent.actionDelayMs ?? DEFAULTS.actionDelayMs);
+
+  updatePresetInfo(presetSelect.value);
 }
 
 // --- Validation ---
@@ -90,6 +193,7 @@ form.addEventListener('submit', async (e) => {
   }
 
   const llmConfig = {
+    preset: presetSelect.value,
     apiBaseUrl: apiBaseUrlInput.value.trim() || DEFAULTS.apiBaseUrl,
     apiKey: apiKeyInput.value,
     modelName: modelNameInput.value.trim() || DEFAULTS.modelName,

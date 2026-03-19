@@ -12,6 +12,21 @@
 
     <form id="config-form">
       <div class="form-group">
+        <label for="providerPreset">Provider Preset</label>
+        <select id="providerPreset">
+          <option value="minimax" selected>MiniMax</option>
+          <option value="openai">OpenAI</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="google">Google</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="custom">Custom</option>
+        </select>
+        <span id="preset-info" class="field-note"></span>
+      </div>
+
+      <hr class="section-divider">
+
+      <div class="form-group">
         <label for="apiBaseUrl">API Base URL</label>
         <input type="text" id="apiBaseUrl" placeholder="https://api.openai.com/v1">
       </div>
