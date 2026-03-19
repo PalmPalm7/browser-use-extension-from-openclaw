@@ -567,6 +567,7 @@ export class ActionExecutor {
       }>(tabId, 'Runtime.callFunctionOn', {
         objectId,
         functionDeclaration: fn,
+        arguments: [{ objectId }],
         returnByValue: true,
       });
 
