@@ -96,6 +96,13 @@ export interface ToolMessage {
 
 export type ChatMessage = SystemMessage | UserMessage | AssistantMessage | ToolMessage;
 
+// --- Agent config ---
+
+export interface AgentConfig {
+  maxIterations: number;
+  actionDelayMs: number;
+}
+
 // --- Agent state ---
 
 export interface AgentState {

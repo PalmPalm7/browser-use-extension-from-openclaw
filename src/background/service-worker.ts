@@ -2,7 +2,7 @@ import { CDPManager } from './cdp-manager';
 import { SnapshotEngine } from './snapshot-engine';
 import { ActionExecutor } from './action-executor';
 import { AgentLoop } from './agent-loop';
-import type { LLMConfig, PanelMessage } from './types';
+import type { AgentConfig, LLMConfig, PanelMessage } from './types';
 
 // --- Module instantiation ---
 const cdp = new CDPManager();
@@ -25,6 +25,14 @@ async function loadConfig(): Promise<LLMConfig> {
     return { ...DEFAULT_CONFIG, ...stored.llmConfig } as LLMConfig;
   }
   return DEFAULT_CONFIG;
+}
+
+async function loadAgentConfig(): Promise<AgentConfig> {
+  const stored = await chrome.storage.local.get('agentConfig');
+  return {
+    maxIterations: stored.agentConfig?.maxIterations ?? 50,
+    actionDelayMs: stored.agentConfig?.actionDelayMs ?? 500,
+  };
 }
 
 let agentLoop: AgentLoop | null = null;
@@ -80,9 +88,10 @@ chrome.runtime.onConnect.addListener((port) => {
     if (msg.type === 'user_prompt') {
       // Load latest config each time
       const config = await loadConfig();
+      const agentConfig = await loadAgentConfig();
 
       // Create a fresh agent loop with latest config
-      agentLoop = new AgentLoop(cdp, snapshotEngine, actionExecutor, config);
+      agentLoop = new AgentLoop(cdp, snapshotEngine, actionExecutor, config, agentConfig);
       wireAgentCallbacks(agentLoop);
 
       // Get the active tab

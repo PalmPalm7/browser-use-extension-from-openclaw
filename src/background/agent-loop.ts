@@ -4,6 +4,7 @@ import { ActionExecutor } from './action-executor';
 import { chatCompletion } from './llm-client';
 import { toolDefinitions } from './tool-definitions';
 import type {
+  AgentConfig,
   AgentState,
   ChatMessage,
   AssistantMessage,
@@ -69,11 +70,16 @@ export class AgentLoop {
     snapshotEngine: SnapshotEngine,
     actionExecutor: ActionExecutor,
     config: LLMConfig,
+    agentConfig?: AgentConfig,
   ) {
     this.cdp = cdp;
     this.snapshotEngine = snapshotEngine;
     this.actionExecutor = actionExecutor;
     this.config = config;
+    if (agentConfig) {
+      this.state.maxIterations = agentConfig.maxIterations;
+      this.state.actionDelayMs = agentConfig.actionDelayMs;
+    }
   }
 
   setConfig(config: LLMConfig): void {
@@ -238,6 +244,12 @@ export class AgentLoop {
           }
 
           this.emitActionResult(toolName, result);
+
+          // Update currentTabId when switching tabs
+          if (toolName === 'tab_focus' && result.success && result.data) {
+            const newTabId = (result.data as { tabId: number }).tabId;
+            this.state.currentTabId = newTabId;
+          }
 
           // Add tool result to conversation
           const toolMessage: ToolMessage = {
