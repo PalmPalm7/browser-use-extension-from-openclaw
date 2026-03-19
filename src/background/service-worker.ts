@@ -14,9 +14,9 @@ const DEFAULT_CONFIG: LLMConfig = {
   apiKey: '',
   modelName: 'MiniMax-M2.5',
   maxTokens: 131072,
-  temperature: 0.2,
+  temperature: 1.0,
   screenshotDetail: 'low',
-  visionEnabled: true,
+  visionEnabled: false,
 };
 
 async function loadConfig(): Promise<LLMConfig> {
