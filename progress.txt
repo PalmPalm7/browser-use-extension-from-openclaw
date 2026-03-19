@@ -1,0 +1,310 @@
+## Codebase Patterns
+- Build: `npm run build` (vite), `npm run typecheck` (tsc --noEmit), `npm run dev` (vite dev)
+- @crxjs/vite-plugin@beta (v2) handles manifest rewriting and service worker loader generation
+- manifest.json at project root is the source; crxjs rewrites paths in dist/manifest.json
+- Icons at public/icons/{16,48,128}.png — crxjs copies them into dist/
+- TypeScript: ES2022 target, strict, ESNext modules, bundler resolution
+- No UI framework — vanilla TS/HTML/CSS
+- Shared types in `src/background/types.ts` — import from there for all interfaces
+- AXNode response from Accessibility.getFullAXTree wraps role/name/value in {type, value} objects
+- Only increase indentation depth when a node receives a ref assignment
+- ActionExecutor.execute() is a switch dispatcher — add new action cases as they're implemented
+- CDP response types need local interfaces (BoxModelResponse, ResolveNodeResponse, etc.) since @types/chrome doesn't type sendCommand results
+
+---
+
+## 2026-03-18 - US-001
+- What was implemented: Project scaffolding with Vite + @crxjs/vite-plugin + TypeScript
+- Files changed: package.json, tsconfig.json, manifest.json, vite.config.ts, .gitignore, src/background/service-worker.ts, src/sidepanel/index.html, src/options/index.html, public/icons/{16,48,128}.png
+- **Learnings for future iterations:**
+  - @crxjs/vite-plugin v2 beta works with Vite 5 out of the box
+  - crxjs generates a service-worker-loader.js that imports the actual compiled service worker
+  - @types/chrome provides chrome.* API typings needed for extension development
+  - manifest.json uses source paths (src/...) — crxjs rewrites them in dist/
+---
+
+## 2026-03-18 - US-002
+- What was implemented: Shared TypeScript type definitions in src/background/types.ts
+- Files changed: src/background/types.ts
+- **Learnings for future iterations:**
+  - ChatMessage is a discriminated union on `role` field: system, user, assistant, tool
+  - OpenAI multi-part content format uses ContentPart[] (TextContent | ImageUrlContent) for user messages with vision
+  - PanelMessage is a discriminated union on `type` field for all side panel <-> service worker messages
+  - RefMap is Map<string, RefEntry> — refs like "e1", "e2" map to node metadata including backendNodeId
+---
+
+## 2026-03-18 - US-003
+- What was implemented: CDPManager class in src/background/cdp-manager.ts wrapping chrome.debugger API
+- Files changed: src/background/cdp-manager.ts
+- **Learnings for future iterations:**
+  - chrome.debugger APIs are callback-based — wrap in Promises for clean async interface
+  - chrome.debugger.attach takes protocol version string "1.3"
+  - After attach, enable required CDP domains: Accessibility.enable, Page.enable, Network.enable
+  - chrome.debugger.onDetach fires with a reason string — use to clean up tracking set
+  - chrome.debugger.onEvent delivers CDP events (method + params) — fan out to registered callbacks
+  - sendCommand result needs cast to T since the callback types it as object | undefined
+  - Prevent double-attach by checking tracking set before calling attach
+---
+
+## 2026-03-18 - US-004
+- What was implemented: SnapshotEngine class in src/background/snapshot-engine.ts
+- Files changed: src/background/snapshot-engine.ts
+- **Learnings for future iterations:**
+  - Accessibility.getFullAXTree returns flat array of AXNode objects with nodeId, childIds, role, name, value, properties
+  - AXNode role/name/value are wrapped in {type, value} objects, not plain strings
+  - Ignored nodes should still have their children walked (they act as transparent containers)
+  - Only increase tree depth when a node gets a ref (otherwise indentation inflates for no-ref structural nodes)
+  - Page.captureScreenshot returns {data: base64string} — the property is `data` not `screenshotBase64`
+  - Use Runtime.evaluate to get page URL/title rather than CDP Page domain methods
+  - VALUE_ROLES (textbox, combobox, searchbox, slider, spinbutton) are the roles that display value= in snapshot text
+---
+
+## 2026-03-18 - US-005
+- What was implemented: ActionExecutor class in src/background/action-executor.ts with base methods for ref resolution and element interaction
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - DOM.getBoxModel returns {model: {content: number[]}} where content is a Quad [x1,y1, x2,y2, x3,y3, x4,y4] — center is average of x/y pairs
+  - DOM.resolveNode({backendNodeId}) returns {object: {objectId}} — objectId is needed for Runtime.callFunctionOn
+  - ActionExecutor.execute is a dispatcher switch — each subsequent US adds cases to it
+  - refMap is ephemeral — must be updated via setRefMap() after every new snapshot
+  - Keep execute() try/catch wrapping all action methods so they always return ActionResult
+---
+
+## 2026-03-18 - US-006
+- What was implemented: Click action method in ActionExecutor with scroll-into-view, center calculation, and 3-event mouse dispatch
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Click requires 3 CDP events in sequence: mouseMoved → mousePressed → mouseReleased
+  - DOM.scrollIntoViewIfNeeded takes {backendNodeId} to scroll element into viewport before interaction
+  - Input.dispatchMouseEvent uses CDP mouse button names: 'left', 'right', 'middle'
+  - Modifier bitmask: Alt=1, Control=2, Meta=4, Shift=8
+  - Define option types (ClickOptions, MouseButton) near the top of the file alongside CDP response interfaces
+  - In execute() dispatcher, cast args to the correct types when passing to action methods
+---
+
+## 2026-03-18 - US-007
+- What was implemented: Type action method in ActionExecutor with focus, value clear, text input, and optional submit/slowly modes
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - DOM.focus({backendNodeId}) focuses an element without needing to resolve objectId first
+  - To clear an input's value, use Runtime.callFunctionOn with objectId — must resolve objectId via DOM.resolveNode
+  - Input.insertText({text}) types all text at once — efficient for normal usage
+  - For "slowly" mode, dispatch individual keyDown/keyUp per character with `text` property on keyDown
+  - Submit is implemented as Enter keyDown + keyUp via Input.dispatchKeyEvent with key and code both set to "Enter"
+  - TypeOptions interface follows same pattern as ClickOptions — define near top of file
+---
+
+## 2026-03-18 - US-008
+- What was implemented: Navigate action method in ActionExecutor with URL validation, Page.navigate CDP call, and readyState polling
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Page.navigate returns {frameId, errorText?} — check errorText for navigation failures
+  - Use `new URL(url)` for URL validation — throws on invalid URLs
+  - Poll document.readyState via Runtime.evaluate to wait for page load (200ms intervals, 15s timeout)
+  - Runtime.evaluate may throw during navigation (page not ready) — catch and continue polling
+  - Navigate doesn't need a ref — it takes a URL string directly, unlike click/type
+---
+
+## 2026-03-18 - US-009
+- What was implemented: Screenshot action method in ActionExecutor with optional fullPage support
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Page.captureScreenshot takes {format: 'png'} and returns {data: base64string}
+  - For full-page screenshots, pass captureBeyondViewport: true
+  - Screenshot doesn't need a ref — it captures the whole viewport (or full page)
+  - ScreenshotOptions interface follows the same pattern as ClickOptions/TypeOptions
+---
+
+## 2026-03-18 - US-010
+- What was implemented: Press, scroll, and hover action methods in ActionExecutor
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - press() uses Input.dispatchKeyEvent with key and code — a KEY_CODE_MAP handles special keys (Enter, Tab, Escape, Arrow keys, etc.)
+  - For standard character keys not in the map, code defaults to `Key${key.toUpperCase()}`
+  - scroll() is the simplest action — just DOM.scrollIntoViewIfNeeded with backendNodeId
+  - hover() dispatches a single mouseMoved event to the element's center point
+  - Press doesn't need a ref — it sends key events to whatever is currently focused
+  - Scroll and hover both require a ref to identify the target element
+---
+
+## 2026-03-18 - US-011
+- What was implemented: Drag action method in ActionExecutor with start/end ref resolution, interpolated mouse movement, and press/release dispatch
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Drag requires both startRef and endRef — two separate refs resolved from the refMap
+  - Scroll the start element into view before beginning the drag sequence
+  - Interpolate movement in ~10 steps using linear interpolation (t = i/steps) for smooth drag
+  - Drag sequence: mouseMoved to start → mousePressed at start → 10x mouseMoved interpolated → mouseReleased at end
+  - In execute() dispatcher, drag args use `startRef` and `endRef` (not just `ref`)
+---
+
+## 2026-03-18 - US-012
+- What was implemented: Select action method in ActionExecutor for dropdown/select elements
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - select() uses Runtime.callFunctionOn with objectId to iterate `<option>` children directly on the DOM element
+  - The helper function sets `opt.selected = true/false` for each option, matching against the provided values array
+  - Must dispatch both 'change' and 'input' events with `{bubbles: true}` after modifying selections
+  - Arguments to Runtime.callFunctionOn use `arguments: [{value: values}]` format — values are passed as the first function parameter
+  - Returns the list of actually selected option values in ActionResult.data.selected
+---
+
+## 2026-03-18 - US-013
+- What was implemented: Fill (batch form fill) action method in ActionExecutor
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - fill() delegates to existing methods: click() for checkbox/radio, select() for dropdowns, type() for text inputs
+  - For checkbox/radio: use Runtime.callFunctionOn to read `this.checked` state, then click only if current state differs from desired value
+  - Desired boolean values parsed from string: "true" or "1" means checked
+  - FillField interface has {ref, type, value} — type determines which sub-action to use
+  - The fill method counts successfully processed fields and returns {filled: number}
+---
+
+## 2026-03-18 - US-014
+- What was implemented: Wait action method in ActionExecutor with text, textGone, selector, url, and fn condition polling
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - wait() polls multiple conditions simultaneously — all must be true for the wait to succeed
+  - Use JSON.stringify() to safely embed string values in Runtime.evaluate expressions (prevents injection)
+  - URL matching uses simple glob-to-regex conversion: replace * with .* and wrap in ^...$
+  - WaitConditions interface has optional timeoutMs (default 10000) and pollIntervalMs is hardcoded at 200ms
+  - Each condition check uses Runtime.evaluate with returnByValue: true for primitive results
+  - On timeout, returns ActionResult with success: false and descriptive error message
+---
+
+## 2026-03-18 - US-015
+- What was implemented: Evaluate action method in ActionExecutor for executing JavaScript in the page context
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - evaluate() has two modes: with ref (Runtime.callFunctionOn with objectId) and without ref (Runtime.evaluate with expression)
+  - CDP Runtime responses include optional exceptionDetails with exception.description and text fields for error reporting
+  - Both Runtime.evaluate and Runtime.callFunctionOn use returnByValue: true to get serializable results
+  - Error extraction chain: exceptionDetails.exception.description ?? exceptionDetails.text ?? fallback
+---
+
+## 2026-03-18 - US-016
+- What was implemented: Tab operation methods (tabList, tabOpen, tabClose, tabFocus) in ActionExecutor
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Tab operations use chrome.tabs API (not CDP) — these are Promise-based in MV3
+  - tabClose should detach the debugger (via cdp.detach) before removing the tab
+  - tabFocus should attach the debugger (via cdp.attach) if not already attached, to prepare for subsequent CDP operations
+  - Tab methods don't need the current tabId from the dispatcher — tabList has no params, tabOpen takes a url, tabClose/tabFocus take their own tabId arg
+  - In execute() dispatcher, tab_close and tab_focus pass args.tabId (not the dispatcher's tabId parameter)
+---
+
+## 2026-03-18 - US-017
+- What was implemented: Cookie management methods (cookiesGet, cookiesSet, cookiesClear) in ActionExecutor
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Network.getCookies takes {urls: string[]} and returns {cookies: CookieEntry[]} — must provide the current page URL
+  - Network.setCookie takes {name, value, url, domain?, path?, secure?, httpOnly?} — url falls back to current page URL if not provided
+  - Network.deleteCookies takes {name, domain, path} — iterate all cookies from getCookies to clear them all
+  - Cookie methods use Runtime.evaluate('location.href') to get the current URL (same pattern as navigate/wait)
+  - CookieEntry and CookieSetParams interfaces defined locally alongside other CDP response types
+  - cookies_get needs no args beyond tabId; cookies_set takes params object; cookies_clear needs no args beyond tabId
+---
+
+## 2026-03-18 - US-018
+- What was implemented: setViewport and pdf action methods in ActionExecutor
+- Files changed: src/background/action-executor.ts
+- **Learnings for future iterations:**
+  - Emulation.setDeviceMetricsOverride takes {width, height, deviceScaleFactor, mobile} — deviceScaleFactor: 1 and mobile: false for desktop emulation
+  - Page.printToPDF takes {} (empty params for defaults) and returns {data: base64string} — same pattern as Page.captureScreenshot
+  - Both set_viewport and pdf are simple CDP wrappers with no ref resolution needed
+  - set_viewport takes width and height as numbers from args; pdf takes no args beyond tabId
+---
+
+## 2026-03-18 - US-019
+- What was implemented: Tool definitions for LLM — all 22 OpenAI function-calling format tool schemas in src/background/tool-definitions.ts
+- Files changed: src/background/tool-definitions.ts
+- **Learnings for future iterations:**
+  - ToolDefinition interface defined locally in tool-definitions.ts (not in types.ts) since it's only used by the LLM client and agent loop
+  - All 22 tools: snapshot, click, type, navigate, screenshot, press, scroll, hover, drag, select, fill, wait, evaluate, tab_list, tab_open, tab_close, tab_focus, cookies_get, cookies_set, cookies_clear, set_viewport, pdf
+  - Tool schemas match OpenAI function-calling format: {type: 'function', function: {name, description, parameters: {type: 'object', properties, required}}}
+  - Tools with no parameters still need an empty properties object and empty required array
+---
+
+## 2026-03-18 - US-020
+- What was implemented: LLM client — chatCompletion function in src/background/llm-client.ts that calls any OpenAI-compatible chat completions endpoint with tool definitions and vision support
+- Files changed: src/background/llm-client.ts
+- **Learnings for future iterations:**
+  - chatCompletion takes (messages, tools, config) and POSTs to ${config.apiBaseUrl}/chat/completions
+  - When visionEnabled is false, image_url content blocks are stripped from messages before sending
+  - Retry logic: 429 and 5xx get exponential backoff (1s, 2s, 4s) up to 3 retries; 401/403 throw immediately
+  - Network errors (fetch failures) also retry with backoff — important for flaky connections
+  - ChatCompletionResponse interface includes choices[].message with content and optional tool_calls
+  - ToolDefinition is imported from tool-definitions.ts (not types.ts) since it's co-located with the schemas
+---
+
+## 2026-03-18 - US-021
+- What was implemented: AgentLoop class in src/background/agent-loop.ts — core orchestration engine that ties snapshot, LLM, and actions together
+- Files changed: src/background/agent-loop.ts
+- **Learnings for future iterations:**
+  - AgentLoop constructor takes CDPManager, SnapshotEngine, ActionExecutor, and LLMConfig — instantiated externally (by service-worker.ts)
+  - setConfig(config) allows updating LLM config between runs (e.g., after user changes settings)
+  - The 'snapshot' tool call is handled directly by the agent loop (not by ActionExecutor) since it needs to update the refMap and emit snapshot preview
+  - Observation messages use OpenAI multi-part content: [{type:'text', text: snapshotText}, {type:'image_url', image_url: {url: data:image/png;base64,..., detail: config.screenshotDetail}}]
+  - Page change detection: compares URL/title before and after action batch, plus checks if action is in PAGE_CHANGE_ACTIONS set (navigate, click, tab_focus, tab_open)
+  - Fresh snapshot taken automatically after page change; refMap updated on every snapshot
+  - Conversation persisted to chrome.storage.session (not local) for service worker survival across restarts
+  - Callbacks (onStatus, onAction, etc.) are single-function registrations (not arrays) — sufficient for single panel connection
+  - Agent loop checks state.status before each LLM call and before each action to support stop()
+  - Max iterations (default 50) checked in the while loop; emits error when exceeded
+---
+
+## 2026-03-18 - US-022
+- What was implemented: Service worker entry point and message routing in src/background/service-worker.ts
+- Files changed: src/background/service-worker.ts
+- **Learnings for future iterations:**
+  - Service worker instantiates all modules at top level: CDPManager → SnapshotEngine → ActionExecutor → AgentLoop (created per prompt)
+  - AgentLoop is created fresh for each user_prompt to get the latest LLMConfig from chrome.storage.local
+  - LLMConfig stored under key 'llmConfig' in chrome.storage.local — loadConfig() merges with defaults
+  - Port connection uses name 'agent-panel' — panel.ts must connect with this exact name
+  - wireAgentCallbacks() maps all 6 AgentLoop callbacks to PanelMessage types sent via port.postMessage
+  - chrome.tabs.query({active: true, currentWindow: true}) gets the currently active tab for the agent to operate on
+  - port.onDisconnect fires when panel closes — must stop the agent loop to prevent orphaned runs
+  - chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }) makes the extension icon open the side panel
+  - sendToPanel() wraps port.postMessage in try/catch since port may be disconnected
+---
+
+## 2026-03-18 - US-023
+- What was implemented: Side panel HTML and CSS — chat interface with message log, input bar, status bar, stop button, and settings gear
+- Files changed: src/sidepanel/index.html, src/sidepanel/panel.css, src/sidepanel/panel.ts (placeholder)
+- **Learnings for future iterations:**
+  - Side panel HTML links panel.css directly and loads panel.ts as a module script
+  - CSS uses flexbox layout: #app is a column flex container, .message-log has flex: 1 for fill
+  - Message types have distinct CSS classes: message-user (right-aligned, blue), message-agent (left-aligned, white), message-action (monospace), message-error (red)
+  - Stop button uses `hidden` attribute (not CSS display) for toggling visibility
+  - Snapshot previews use a collapsible pattern: .snapshot-toggle + .snapshot-content with .open class
+  - Status text uses color classes: .thinking (blue), .acting (orange), .error (red)
+  - panel.ts placeholder created as empty export — US-024 will implement the logic
+  - @crxjs/vite-plugin handles CSS bundling from HTML link tags automatically
+---
+
+## 2026-03-18 - US-024
+- What was implemented: Side panel chat logic in src/sidepanel/panel.ts — port connection, message handling, and UI interaction
+- Files changed: src/sidepanel/panel.ts
+- **Learnings for future iterations:**
+  - chrome.runtime.connect({ name: 'agent-panel' }) establishes the port connection — name must match what service-worker.ts expects
+  - PanelMessage is imported as a type from background/types.ts — discriminated union on `type` field drives the switch handler
+  - port.onMessage listener receives PanelMessage objects; port.postMessage sends UserPromptMessage or StopMessage
+  - port.onDisconnect fires when the service worker or panel disconnects — show reconnect message and re-enable input
+  - Snapshot preview uses CSS class toggle pattern: .snapshot-content.open toggles display
+  - Status updates control both the status text/color AND the stop button visibility and input enabled state
+  - Auto-scroll to bottom: set messageLog.scrollTop = messageLog.scrollHeight after each append
+  - Enter key on input triggers send (with shift+enter prevention for future multiline support)
+  - chrome.runtime.openOptionsPage() opens the configured options page from the manifest
+---
+
+## 2026-03-18 - US-025
+- What was implemented: Options page with HTML form, CSS styling, and TypeScript load/save logic for LLM and agent configuration
+- Files changed: src/options/index.html, src/options/options.css, src/options/options.ts
+- **Learnings for future iterations:**
+  - LLM config stored under `llmConfig` key in chrome.storage.local (matches service-worker.ts loadConfig)
+  - Agent config (maxIterations, actionDelayMs) stored under separate `agentConfig` key to avoid polluting LLMConfig type
+  - Options page uses form submit event for save — prevents accidental page reload with e.preventDefault()
+  - Validation runs before save: URL protocol check, numeric range checks (maxTokens > 0, temp 0-2, iterations > 0, delay >= 0)
+  - Status message uses setTimeout to auto-clear after 2s for non-error messages
+  - @crxjs/vite-plugin bundles options.css and options.ts automatically from HTML link/script tags
+---

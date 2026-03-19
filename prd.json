@@ -1,0 +1,491 @@
+{
+  "project": "Browser Use Extension",
+  "branchName": "ralph/browser-use-extension-kernel",
+  "description": "Manifest V3 Chrome extension that replicates OpenClaw browser automation as a standalone plugin - agentic tool-use loop with accessibility tree snapshots, CDP-based actions, and OpenAI-compatible LLM integration",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Project scaffolding",
+      "description": "As a developer, I need the project initialized with build tooling so that TypeScript source compiles into a loadable Chrome extension.",
+      "acceptanceCriteria": [
+        "package.json with name browser-use-extension, scripts: dev, build, typecheck",
+        "Dependencies: vite, @crxjs/vite-plugin, typescript",
+        "tsconfig.json targeting ES2022, strict mode, module ESNext, moduleResolution bundler",
+        "vite.config.ts using @crxjs/vite-plugin with manifest import",
+        "manifest.json at project root with manifest_version 3, permissions: [debugger, activeTab, tabs, sidePanel, storage], host_permissions: [https://*/*, http://*/*], background.service_worker, side_panel.default_path, options_page, action with icons",
+        "Placeholder src/background/service-worker.ts (empty export), src/sidepanel/index.html (minimal HTML), src/options/index.html (minimal HTML)",
+        "Placeholder icon PNGs at public/icons/16.png, public/icons/48.png, public/icons/128.png (simple colored squares)",
+        ".gitignore includes node_modules/ and dist/",
+        "npm run build succeeds and produces dist/ with valid extension files",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Chrome 118+ minimum. Use @crxjs/vite-plugin@beta if needed for Vite 5+ compatibility."
+    },
+    {
+      "id": "US-002",
+      "title": "Shared type definitions",
+      "description": "As a developer, I need shared TypeScript types so all modules use consistent interfaces.",
+      "acceptanceCriteria": [
+        "Create src/background/types.ts",
+        "RefEntry interface: backendNodeId: number, nodeId?: number, role: string, name: string, value?: string, properties?: Record<string, unknown>",
+        "RefMap type as Map<string, RefEntry>",
+        "HybridSnapshot interface: text: string, screenshotBase64: string, refMap: RefMap, metadata: { url, title, truncated, totalElements, visibleElements }",
+        "ActionResult interface: success: boolean, data?: unknown, error?: string",
+        "LLMConfig interface: apiBaseUrl, apiKey, modelName, maxTokens, temperature, screenshotDetail ('low'|'high'), visionEnabled boolean",
+        "AgentState interface: status ('idle'|'running'|'paused'|'error'), conversationHistory: ChatMessage[], currentTabId: number|null, iteration: number, maxIterations: number, actionDelayMs: number",
+        "ChatMessage type matching OpenAI chat completion format (text content, image_url content blocks, tool_calls, tool role messages)",
+        "PanelMessage union type for all side panel <-> service worker message types: user_prompt, stop, status, action, action_result, agent_message, error, snapshot_preview",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "CDP Manager",
+      "description": "As a developer, I need a wrapper around chrome.debugger that provides a clean async interface for sending CDP commands.",
+      "acceptanceCriteria": [
+        "Create src/background/cdp-manager.ts exporting CDPManager class",
+        "attach(tabId): Promise<void> — wraps chrome.debugger.attach(target, '1.3') in Promise, tracks in Set<number>, enables Accessibility.enable + Page.enable + Network.enable after attach",
+        "detach(tabId): Promise<void> — wraps chrome.debugger.detach, removes from tracking set",
+        "detachAll(): Promise<void> — detaches all tracked tabs",
+        "isAttached(tabId): boolean — checks tracking set",
+        "send<T>(tabId, method, params?): Promise<T> — wraps chrome.debugger.sendCommand in Promise",
+        "Prevents double-attach (no-op if already attached)",
+        "Listens to chrome.debugger.onDetach to clean up tracking set",
+        "Listens to chrome.debugger.onEvent, exposes via onEvent(callback) method",
+        "Exposes onDetach(callback) for external listeners",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Accessibility CDP domain is experimental but stable in practice. Handle unexpected response shapes gracefully."
+    },
+    {
+      "id": "US-004",
+      "title": "Snapshot engine — accessibility tree and ref assignment",
+      "description": "As a developer, I need to capture the accessibility tree from a page and assign numbered refs to interactive/named elements.",
+      "acceptanceCriteria": [
+        "Create src/background/snapshot-engine.ts exporting SnapshotEngine class that takes CDPManager",
+        "takeSnapshot(tabId): Promise<HybridSnapshot> is the main method",
+        "Calls Accessibility.getFullAXTree via CDP Manager",
+        "Walks tree and assigns refs (e1, e2, e3...) based on role categories",
+        "Interactive roles (button, checkbox, combobox, link, menuitem, menuitemcheckbox, menuitemradio, option, radio, searchbox, slider, spinbutton, switch, tab, textbox, treeitem) always get a ref",
+        "Content roles (heading, img, listitem, cell, row, table, list, paragraph, blockquote, code, contentinfo, navigation, banner, main, complementary, form, region, alert, dialog, status, tooltip) get a ref only when they have a name",
+        "All other roles (generic, group, div, etc.) are skipped",
+        "Builds RefMap mapping ref strings to RefEntry objects with backendNodeId, role, name, value, properties",
+        "Formats text with 2-space indentation per level, e.g. [e1] button 'Submit'",
+        "Header line: Page: 'title' | URL: url",
+        "Shows values for input elements (textbox, combobox, etc.)",
+        "Annotates focused/checked/disabled states",
+        "Configurable maxDepth (default 10) and maxChars (default 30000)",
+        "Appends '[truncated - N more elements not shown]' when truncated",
+        "Calls Page.captureScreenshot for viewport screenshot as base64 PNG",
+        "Returns complete HybridSnapshot with text, screenshotBase64, refMap, metadata",
+        "RefMap rebuilt on every call (refs are ephemeral)",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "This is a larger story but the logic is tightly coupled — tree walking, ref assignment, and formatting must be done together."
+    },
+    {
+      "id": "US-005",
+      "title": "Action executor — base and ref resolution",
+      "description": "As a developer, I need a base action executor that can resolve refs to DOM coordinates so individual actions can target elements.",
+      "acceptanceCriteria": [
+        "Create src/background/action-executor.ts exporting ActionExecutor class that takes CDPManager",
+        "Stores RefMap reference, updated via setRefMap(refMap) method",
+        "resolveRef(ref) — looks up ref in RefMap, throws descriptive error if not found ('ref e5 not found — element may have changed, take a new snapshot')",
+        "getElementCenter(tabId, backendNodeId): Promise<{x, y}> — calls DOM.getBoxModel, extracts center from content quad: x=(quad[0]+quad[2]+quad[4]+quad[6])/4, y=(quad[1]+quad[3]+quad[5]+quad[7])/4",
+        "resolveObjectId(tabId, backendNodeId): Promise<string> — calls DOM.resolveNode, returns objectId",
+        "execute(tabId, toolName, args): Promise<ActionResult> — dispatcher that routes to action methods, wraps in try/catch returning ActionResult",
+        "All errors return ActionResult with success: false and descriptive error string",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "DOM.getBoxModel returns {model: {content, padding, border, margin, width, height}} where content is a Quad: [x1,y1, x2,y2, x3,y3, x4,y4]."
+    },
+    {
+      "id": "US-006",
+      "title": "Action executor — click",
+      "description": "As a developer, I need the click action so the agent can click on page elements.",
+      "acceptanceCriteria": [
+        "Add click(tabId, ref, options?) method to ActionExecutor",
+        "Calls DOM.scrollIntoViewIfNeeded({backendNodeId}) before clicking",
+        "Gets element center via getElementCenter",
+        "Dispatches three mouse events via Input.dispatchMouseEvent: mouseMoved, mousePressed (button: left, clickCount: 1), mouseReleased",
+        "Supports doubleClick option (clickCount: 2)",
+        "Supports button option (left/right/middle)",
+        "Supports modifiers option (Alt=1, Control=2, Meta=4, Shift=8 bitmask)",
+        "Returns ActionResult with success: true",
+        "Registered in execute dispatcher",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Action executor — type",
+      "description": "As a developer, I need the type action so the agent can enter text into input fields.",
+      "acceptanceCriteria": [
+        "Add type(tabId, ref, text, options?) method to ActionExecutor",
+        "Calls DOM.focus({backendNodeId}) to focus the element",
+        "Clears existing value via Runtime.callFunctionOn with function: function(){this.value='';this.dispatchEvent(new Event('input',{bubbles:true}))}",
+        "Types text via Input.insertText({text})",
+        "Supports submit option: dispatches keyDown + keyUp for Enter key after typing",
+        "Supports slowly option: dispatches individual keyDown/keyUp per character instead of insertText",
+        "Returns ActionResult with success: true",
+        "Registered in execute dispatcher",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Action executor — navigate",
+      "description": "As a developer, I need the navigate action so the agent can go to URLs.",
+      "acceptanceCriteria": [
+        "Add navigate(tabId, url) method to ActionExecutor",
+        "Calls Page.navigate({url}) via CDP",
+        "Waits for page load by listening for Page.loadEventFired or polling document.readyState via Runtime.evaluate",
+        "Returns ActionResult with success: true and data: { url }",
+        "Handles navigation errors (invalid URL, network error) with descriptive error messages",
+        "Registered in execute dispatcher",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Action executor — screenshot",
+      "description": "As a developer, I need the screenshot action so the agent can capture page visuals on demand.",
+      "acceptanceCriteria": [
+        "Add screenshot(tabId, options?) method to ActionExecutor",
+        "Calls Page.captureScreenshot({format: 'png'}) via CDP",
+        "Supports fullPage option using captureBeyondViewport: true",
+        "Returns ActionResult with success: true and data: { base64: string }",
+        "Registered in execute dispatcher",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Action executor — press, scroll, hover",
+      "description": "As a developer, I need keyboard and pointer actions for navigation and interaction.",
+      "acceptanceCriteria": [
+        "Add press(tabId, key) method — dispatches keyDown + keyUp via Input.dispatchKeyEvent with proper key and code values; supports Enter, Tab, Escape, Arrow keys, Backspace, Delete, and standard characters",
+        "Add scroll(tabId, ref) method — calls DOM.scrollIntoViewIfNeeded({backendNodeId})",
+        "Add hover(tabId, ref) method — gets element center via getElementCenter, dispatches mouseMoved event",
+        "All three return ActionResult with success: true",
+        "All three registered in execute dispatcher",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Action executor — drag",
+      "description": "As a developer, I need the drag action for drag-and-drop interactions.",
+      "acceptanceCriteria": [
+        "Add drag(tabId, startRef, endRef) method to ActionExecutor",
+        "Gets center coordinates for both start and end elements",
+        "Dispatches mousePressed at start position (button: left)",
+        "Interpolates movement in ~10 steps from start to end, dispatching mouseMoved at each step",
+        "Dispatches mouseReleased at end position",
+        "Returns ActionResult with success: true",
+        "Registered in execute dispatcher",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Action executor — select",
+      "description": "As a developer, I need the select action for dropdown/select elements.",
+      "acceptanceCriteria": [
+        "Add select(tabId, ref, values) method to ActionExecutor",
+        "Resolves element objectId via DOM.resolveNode",
+        "Calls Runtime.callFunctionOn with helper that iterates <option> children, sets selected on matching options by value, dispatches change and input events with bubbles: true",
+        "Returns ActionResult with success: true and data: { selected: string[] }",
+        "Registered in execute dispatcher",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Action executor — fill (batch form fill)",
+      "description": "As a developer, I need the fill action to batch-fill multiple form fields in one tool call.",
+      "acceptanceCriteria": [
+        "Add fill(tabId, fields) method where fields is Array<{ref, type, value}>",
+        "For checkbox/radio type: checks current state via CDP, clicks if state doesn't match desired value",
+        "For select type: calls this.select(tabId, ref, [value])",
+        "For text/other types: calls this.type(tabId, ref, value)",
+        "Returns ActionResult with success: true and data: { filled: number }",
+        "Registered in execute dispatcher",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Action executor — wait",
+      "description": "As a developer, I need the wait action so the agent can pause until page conditions are met.",
+      "acceptanceCriteria": [
+        "Add wait(tabId, conditions) method to ActionExecutor",
+        "Supports text condition: polls Runtime.evaluate checking document.body.innerText.includes(text)",
+        "Supports textGone condition: polls checking !document.body.innerText.includes(text)",
+        "Supports selector condition: polls checking document.querySelector(selector) !== null",
+        "Supports url condition: polls checking location.href matches pattern (simple glob with *)",
+        "Supports fn condition: polls evaluating custom JS expression for truthy return",
+        "Polls every 200ms",
+        "Configurable timeoutMs (default 10000)",
+        "Returns ActionResult with success: true when condition met, success: false with error on timeout",
+        "Registered in execute dispatcher",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Action executor — evaluate",
+      "description": "As a developer, I need the evaluate action so the agent can run JavaScript in the page context.",
+      "acceptanceCriteria": [
+        "Add evaluate(tabId, fn, ref?) method to ActionExecutor",
+        "If ref provided: resolves objectId, calls Runtime.callFunctionOn({objectId, functionDeclaration: fn, returnByValue: true})",
+        "If no ref: calls Runtime.evaluate({expression: fn, returnByValue: true})",
+        "Returns ActionResult with success: true and data set to evaluated result",
+        "Handles evaluation errors (syntax, runtime exceptions) with descriptive messages",
+        "Registered in execute dispatcher",
+        "Typecheck passes"
+      ],
+      "priority": 15,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Action executor — tab operations",
+      "description": "As a developer, I need tab management actions so the agent can work across multiple tabs.",
+      "acceptanceCriteria": [
+        "Add tabList() method — calls chrome.tabs.query({}), returns ActionResult with data: Array<{id, title, url, active}>",
+        "Add tabOpen(url) method — calls chrome.tabs.create({url}), returns new tab info",
+        "Add tabClose(tabId) method — calls chrome.tabs.remove(tabId), detaches debugger if attached",
+        "Add tabFocus(tabId) method — calls chrome.tabs.update(tabId, {active: true}), attaches debugger if not already attached",
+        "All four registered in execute dispatcher as tab_list, tab_open, tab_close, tab_focus",
+        "Typecheck passes"
+      ],
+      "priority": 16,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "Action executor — cookies",
+      "description": "As a developer, I need cookie management actions for the agent.",
+      "acceptanceCriteria": [
+        "Add cookiesGet(tabId) method — calls Network.getCookies({urls: [currentUrl]}) via CDP, returns cookie array",
+        "Add cookiesSet(tabId, params) method — calls Network.setCookie({name, value, url, domain?, path?, secure?, httpOnly?}) via CDP",
+        "Add cookiesClear(tabId) method — gets current URL, calls Network.deleteCookies for all cookies on current domain",
+        "All three registered in execute dispatcher as cookies_get, cookies_set, cookies_clear",
+        "Typecheck passes"
+      ],
+      "priority": 17,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "Action executor — set viewport and PDF export",
+      "description": "As a developer, I need viewport emulation and PDF export actions.",
+      "acceptanceCriteria": [
+        "Add setViewport(tabId, width, height) method — calls Emulation.setDeviceMetricsOverride({width, height, deviceScaleFactor: 1, mobile: false})",
+        "Add pdf(tabId) method — calls Page.printToPDF({}) via CDP, returns ActionResult with data: { base64: string }",
+        "Both registered in execute dispatcher as set_viewport and pdf",
+        "Typecheck passes"
+      ],
+      "priority": 18,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "Tool definitions for LLM",
+      "description": "As a developer, I need OpenAI function-calling format tool schemas to send to the LLM.",
+      "acceptanceCriteria": [
+        "Create src/background/tool-definitions.ts exporting const toolDefinitions array",
+        "Contains all 22 tool schemas: snapshot, click, type, navigate, screenshot, press, scroll, hover, drag, select, fill, wait, evaluate, tab_list, tab_open, tab_close, tab_focus, cookies_get, cookies_set, cookies_clear, set_viewport, pdf",
+        "Each tool has type: 'function', function: {name, description, parameters} matching OpenAI format",
+        "Parameter types, enums, and required arrays match the design spec exactly",
+        "Typecheck passes"
+      ],
+      "priority": 19,
+      "passes": true,
+      "notes": "Refer to docs/superpowers/specs/2026-03-18-browser-use-extension-kernel-design.md section 6 for exact tool schemas."
+    },
+    {
+      "id": "US-020",
+      "title": "LLM client",
+      "description": "As a developer, I need an API client that calls any OpenAI-compatible chat completions endpoint with tool definitions and vision support.",
+      "acceptanceCriteria": [
+        "Create src/background/llm-client.ts exporting chatCompletion function",
+        "Signature: chatCompletion(messages, tools, config: LLMConfig): Promise<ChatCompletionResponse>",
+        "POST to ${config.apiBaseUrl}/chat/completions with model, messages, tools, tool_choice: 'auto', max_tokens, temperature",
+        "Headers: Content-Type application/json, Authorization Bearer ${config.apiKey}",
+        "If config.visionEnabled is false, strips image_url content blocks from messages before sending",
+        "Retries on 429 and 5xx with exponential backoff (1s, 2s, 4s), max 3 retries",
+        "On 401/403 returns clear error immediately (no retry)",
+        "Parses and returns typed response with message.content and message.tool_calls",
+        "Typecheck passes"
+      ],
+      "priority": 20,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-021",
+      "title": "Agent loop — core orchestration",
+      "description": "As a developer, I need the core agent loop that ties snapshot, LLM, and actions together into an autonomous cycle.",
+      "acceptanceCriteria": [
+        "Create src/background/agent-loop.ts exporting AgentLoop class",
+        "Constructor takes CDPManager, SnapshotEngine, ActionExecutor, and LLMConfig",
+        "start(userPrompt, tabId): Promise<void> initiates the loop",
+        "On start: sets status running, attaches debugger, takes initial hybrid snapshot, builds conversation history with system prompt + observation + user prompt",
+        "System prompt matches spec template (describes refs, screenshot, tools, instructions)",
+        "Observation messages use OpenAI multi-part content format: text block (snapshot) + image_url block (base64 PNG with configurable detail)",
+        "Loop calls LLM, if text response with no tool_calls: emits agent_message, sets idle, breaks",
+        "If tool_calls: executes each via ActionExecutor, collects tool result messages, takes fresh snapshot if page changed",
+        "Page change detection: compares URL/title before and after, or if action was navigate/click/tab_focus/tab_open",
+        "Respects maxIterations (default 50), emits error if exceeded",
+        "Respects actionDelayMs (default 500ms) between actions",
+        "stop() method sets status idle, checked before each LLM call and action",
+        "Emits callbacks: onStatus, onAction, onActionResult, onMessage, onError, onSnapshotPreview",
+        "Persists conversation history to chrome.storage.session on stop for service worker survival",
+        "Typecheck passes"
+      ],
+      "priority": 21,
+      "passes": true,
+      "notes": "This is the core engine. Large but tightly coupled — splitting would create artificial boundaries."
+    },
+    {
+      "id": "US-022",
+      "title": "Service worker — entry point and message routing",
+      "description": "As a developer, I need the service worker to initialize all modules and route messages between the side panel and agent loop.",
+      "acceptanceCriteria": [
+        "Update src/background/service-worker.ts as main entry point",
+        "Instantiates CDPManager, SnapshotEngine, ActionExecutor, AgentLoop",
+        "Loads LLMConfig from chrome.storage.local on startup",
+        "Listens to chrome.runtime.onConnect for 'agent-panel' port connections",
+        "On user_prompt message: loads latest config, calls agentLoop.start(prompt, activeTabId)",
+        "On stop message: calls agentLoop.stop()",
+        "Wires AgentLoop callbacks to forward messages to panel port (status, action, action_result, agent_message, error, snapshot_preview)",
+        "Handles port.onDisconnect: stops agent loop, cleans up",
+        "Sets chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })",
+        "Typecheck passes"
+      ],
+      "priority": 22,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-023",
+      "title": "Side panel — HTML and CSS",
+      "description": "As a developer, I need the side panel markup and styles for the chat interface.",
+      "acceptanceCriteria": [
+        "Update src/sidepanel/index.html with: message log container (scrollable div), text input + send button, status bar, stop button (hidden when idle), settings gear button",
+        "Create src/sidepanel/panel.css with minimal functional styling",
+        "Message log fills available height, scrolls vertically",
+        "User messages right-aligned with distinct background color",
+        "Agent actions in monospace font",
+        "Agent responses left-aligned",
+        "Error messages in red",
+        "Status bar at bottom showing idle/thinking/acting/error",
+        "Stop button prominent (red/warning color), hidden when idle",
+        "Input stretches to fill width, send button beside it",
+        "Clean readable typography with system font stack",
+        "Typecheck passes"
+      ],
+      "priority": 23,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-024",
+      "title": "Side panel — chat logic",
+      "description": "As a developer, I need the side panel TypeScript that connects to the service worker and drives the chat UI.",
+      "acceptanceCriteria": [
+        "Create src/sidepanel/panel.ts loaded by index.html",
+        "On load connects to service worker: chrome.runtime.connect({ name: 'agent-panel' })",
+        "Send button sends {type: 'user_prompt', text} via port, appends user message to log, clears input, disables input + send",
+        "Enter key in input triggers send",
+        "Stop button sends {type: 'stop'} via port",
+        "Port message handler renders by type: status updates bar and toggles stop/input; action appends monospace tool+args; action_result shows success/failure; agent_message appends response; error appends in red; snapshot_preview shows in collapsible",
+        "Message log auto-scrolls to bottom on new messages",
+        "Settings gear opens options via chrome.runtime.openOptionsPage()",
+        "Handles port.onDisconnect gracefully (shows reconnect message)",
+        "Typecheck passes"
+      ],
+      "priority": 24,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-025",
+      "title": "Options page — HTML, CSS, and logic",
+      "description": "As a developer, I need the options page where users configure their LLM API connection.",
+      "acceptanceCriteria": [
+        "Update src/options/index.html with form: API Base URL (text, placeholder https://api.openai.com/v1), API Key (password, with 'stored unencrypted' note), Model Name (text, placeholder gpt-4o), Max Tokens (number, default 4096), Temperature (number step 0.1, default 0.2), Screenshot Detail (select low|high), Vision Enabled (checkbox, default checked), Max Iterations (number, default 50), Action Delay (number ms, default 500), Save button, status message area",
+        "Create src/options/options.css with clean form styling (labels above inputs, max-width, readable spacing)",
+        "Create src/options/options.ts: on load reads config from chrome.storage.local and populates form",
+        "Save button writes all fields to chrome.storage.local, shows brief 'Saved' confirmation",
+        "Validates API Base URL starts with http:// or https://",
+        "Validates numeric fields (max tokens > 0, temperature 0-2, iterations > 0, delay >= 0)",
+        "Typecheck passes"
+      ],
+      "priority": 25,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-026",
+      "title": "Integration — end-to-end wiring and build verification",
+      "description": "As a developer, I need all modules wired together so the extension builds and loads as a complete unit.",
+      "acceptanceCriteria": [
+        "Service worker imports and initializes all modules in correct dependency order",
+        "Vite config properly bundles all entry points: service-worker.ts, sidepanel/index.html, options/index.html",
+        "npm run build produces a complete loadable extension in dist/",
+        "npm run typecheck passes with zero errors",
+        "No circular dependency issues between modules",
+        "manifest.json references correct paths (handled by @crxjs/vite-plugin)",
+        "Typecheck passes"
+      ],
+      "priority": 26,
+      "passes": true,
+      "notes": "This story is about fixing any integration issues that emerge when all pieces come together. May involve adjusting imports, fixing type mismatches, or tweaking vite config."
+    }
+  ]
+}
